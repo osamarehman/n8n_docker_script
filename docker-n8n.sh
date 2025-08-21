@@ -774,15 +774,14 @@ N8N_METRICS=false
 # Qdrant Configuration
 QDRANT_API_KEY=${qdrant_api_key}
 
-# Container Versions
-N8N_VERSION=${N8N_VERSION}
-QDRANT_VERSION=${QDRANT_VERSION}
-CADDY_VERSION=${CADDY_VERSION}
-DOZZLE_VERSION=${DOZZLE_VERSION}
-PORTAINER_VERSION=${PORTAINER_VERSION}
-
 # Domain Configuration
 ${N8N_DOMAIN:+N8N_DOMAIN=${N8N_DOMAIN}}
+
+# Subdomain Configuration
+${N8N_DOMAIN:+N8N_SUBDOMAIN=${N8N_SUBDOMAIN}}
+${N8N_DOMAIN:+PORTAINER_SUBDOMAIN=${PORTAINER_SUBDOMAIN}}
+${N8N_DOMAIN:+DOZZLE_SUBDOMAIN=${DOZZLE_SUBDOMAIN}}
+${N8N_DOMAIN:+QDRANT_SUBDOMAIN=${QDRANT_SUBDOMAIN}}
 EOF
     
     file_operation "chmod" 600 "${SETUP_DIR}/.env"
@@ -1241,10 +1240,12 @@ create_management_script() {
 show_results_impl() {
     local public_ip
     if ! public_ip=$(safe_curl "ifconfig.me"); then
-        public_ip="109.123.247.217"
+        if ! public_ip=$(safe_curl "ipv4.icanhazip.com"); then
+            public_ip="your-server-ip"
+        fi
     fi
     
-    # Load credentials
+    # Load credentials from .env file
     source "${SETUP_DIR}/.env"
     
     echo
@@ -1254,7 +1255,7 @@ show_results_impl() {
     echo
     
     if [ -n "${N8N_DOMAIN:-}" ]; then
-        # Extract root domain from N8N_DOMAIN (e.g., ai.mughal.pro -> mughal.pro)
+        # Extract root domain from N8N_DOMAIN (e.g., n8n.mughal.pro -> mughal.pro)
         local root_domain
         if [[ "$N8N_DOMAIN" =~ ^[^.]+\.(.+)$ ]]; then
             root_domain="${BASH_REMATCH[1]}"
@@ -1262,17 +1263,23 @@ show_results_impl() {
             root_domain="$N8N_DOMAIN"
         fi
         
+        # Use subdomain variables from .env file or fallback to script defaults
+        local n8n_sub="${N8N_SUBDOMAIN:-n8n}"
+        local portainer_sub="${PORTAINER_SUBDOMAIN:-portainer}"
+        local dozzle_sub="${DOZZLE_SUBDOMAIN:-dozzle}"
+        local qdrant_sub="${QDRANT_SUBDOMAIN:-qdrant}"
+        
         echo "🌐 n8n: https://${N8N_DOMAIN}"
-        echo "🔧 Qdrant Vector DB: https://${QDRANT_SUBDOMAIN}.${root_domain}"
+        echo "🔧 Qdrant Vector DB: https://${qdrant_sub}.${root_domain}"
         echo "   └─ API Key: ${QDRANT_API_KEY}"
-        echo "📊 Container Logs: https://${DOZZLE_SUBDOMAIN}.${root_domain} (Dozzle)"
-        echo "🐳 Docker Management: https://${PORTAINER_SUBDOMAIN}.${root_domain} (Portainer)"
+        echo "📊 Container Logs: https://${dozzle_sub}.${root_domain} (Dozzle)"
+        echo "🐳 Docker Management: https://${portainer_sub}.${root_domain} (Portainer)"
         echo "   └─ Username: admin | Password: admin123456"
         echo "⚠️  Ensure DNS records point to ${public_ip}:"
         echo "   • ${N8N_DOMAIN} → ${public_ip}"
-        echo "   • ${PORTAINER_SUBDOMAIN}.${root_domain} → ${public_ip}"
-        echo "   • ${DOZZLE_SUBDOMAIN}.${root_domain} → ${public_ip}"
-        echo "   • ${QDRANT_SUBDOMAIN}.${root_domain} → ${public_ip}"
+        echo "   • ${portainer_sub}.${root_domain} → ${public_ip}"
+        echo "   • ${dozzle_sub}.${root_domain} → ${public_ip}"
+        echo "   • ${qdrant_sub}.${root_domain} → ${public_ip}"
         echo "🔒 SSL Certificate: Automatic via Let's Encrypt"
     else
         echo "🌐 n8n: http://${public_ip}:5678"
@@ -1291,8 +1298,8 @@ show_results_impl() {
     echo
     echo "✅ Features:"
     echo "   ✓ SQLite database (no PostgreSQL complexity)"
-    echo "   ✓ Qdrant vector database"
-    echo "   ✓ Automatic HTTPS ${N8N_DOMAIN:+(with ${N8N_DOMAIN})}${N8N_DOMAIN:-"(add domain for HTTPS)"}"
+    echo "   ✓ Qdrant vector database with API key authentication"
+    echo "   ✓ Automatic HTTPS ${N8N_DOMAIN:+(with subdomain routing)}${N8N_DOMAIN:-"(add domain for HTTPS)"}"
     echo "   ✓ Container monitoring (Dozzle + Portainer)"
     echo "   ✓ Firewall configured"
     echo "   ✓ Comprehensive retry mechanisms for reliability"
