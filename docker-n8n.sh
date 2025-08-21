@@ -919,6 +919,10 @@ deploy_services_impl() {
     file_operation "mkdir" data/n8n data/qdrant data/portainer
     file_operation "chown" 1000:1000 data/n8n data/qdrant
     
+    # Pull latest images before starting services
+    info "Pulling latest container images..."
+    $DOCKER_COMPOSE_CMD pull
+    
     # Start services
     docker_operation "compose_up"
     
