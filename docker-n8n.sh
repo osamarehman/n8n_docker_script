@@ -244,11 +244,20 @@ setup_firewall() {
 }
 
 # --- FIXED: Early Variable Collection ---
+# --- FIXED: Better Input Collection ---
 collect_configuration() {
     info "Collecting deployment configuration..."
     
-    # Check for non-interactive mode
+    # Check for non-interactive mode or auto mode
     local auto_mode=false
+    local non_interactive=false
+    
+    # Check if running non-interactively (piped input)
+    if [ ! -t 0 ]; then
+        non_interactive=true
+    fi
+    
+    # Check for auto mode flag
     for arg in "$@"; do
         if [ "$arg" = "--auto" ]; then
             auto_mode=true
@@ -258,11 +267,18 @@ collect_configuration() {
     
     # Collect N8N_DOMAIN
     if [ -z "$N8N_DOMAIN" ]; then
-        if [ "$auto_mode" = "true" ]; then
-            info "Auto mode: Using IP-based access (no domain)"
+        if [ "$auto_mode" = "true" ] || [ "$non_interactive" = "true" ]; then
+            info "Non-interactive mode: Using IP-based access (no domain)"
+            info "To use a domain, set N8N_DOMAIN environment variable"
         else
-            echo -n "Enter domain for n8n (leave empty for IP access): "
-            read N8N_DOMAIN
+            # Use /dev/tty for interactive input when possible
+            if [ -c /dev/tty ]; then
+                echo -n "Enter domain for n8n (leave empty for IP access): " > /dev/tty
+                read N8N_DOMAIN < /dev/tty
+            else
+                warning "Cannot read interactive input. Using IP-based access."
+                warning "To use a domain, set N8N_DOMAIN environment variable before running."
+            fi
         fi
     fi
     
@@ -270,9 +286,9 @@ collect_configuration() {
     if [ -n "$N8N_DOMAIN" ]; then
         if [[ ! "$N8N_DOMAIN" =~ ^[a-zA-Z0-9][a-zA-Z0-9\.-]*[a-zA-Z0-9]$ ]]; then
             warning "Domain format may be invalid: $N8N_DOMAIN"
-            if [ "$auto_mode" = "false" ]; then
-                echo -n "Continue anyway? (y/N): "
-                read continue_anyway
+            if [ "$auto_mode" = "false" ] && [ "$non_interactive" = "false" ] && [ -c /dev/tty ]; then
+                echo -n "Continue anyway? (y/N): " > /dev/tty
+                read continue_anyway < /dev/tty
                 if [[ ! "$continue_anyway" =~ ^[Yy]$ ]]; then
                     error "Deployment cancelled due to invalid domain"
                 fi
@@ -285,13 +301,18 @@ collect_configuration() {
     
     # Collect N8N_USER
     if [ -z "$N8N_USER" ]; then
-        if [ "$auto_mode" = "true" ]; then
+        if [ "$auto_mode" = "true" ] || [ "$non_interactive" = "true" ]; then
             N8N_USER="admin"
-            info "Auto mode: Using default username 'admin'"
+            info "Using default username 'admin'"
         else
-            echo -n "Enter n8n admin username [admin]: "
-            read N8N_USER
-            N8N_USER="${N8N_USER:-admin}"
+            if [ -c /dev/tty ]; then
+                echo -n "Enter n8n admin username [admin]: " > /dev/tty
+                read N8N_USER < /dev/tty
+                N8N_USER="${N8N_USER:-admin}"
+            else
+                N8N_USER="admin"
+                info "Using default username 'admin'"
+            fi
         fi
     fi
     
@@ -301,9 +322,6 @@ collect_configuration() {
     fi
     
     info "Admin username: $N8N_USER"
-    
-    # SECURITY: Clear any sensitive environment variables
-    unset N8N_BASIC_AUTH_PASSWORD 2>/dev/null || true
 }
 
 # --- Generate Secure Credentials ---
