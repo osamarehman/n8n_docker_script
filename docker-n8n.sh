@@ -37,6 +37,12 @@ DOCKER_COMPOSE_CMD=""
 FORCE_INTERACTIVE="${FORCE_INTERACTIVE:-false}"
 CLEANUP_ACTION="${CLEANUP_ACTION:-}"
 
+# Subdomain configuration
+N8N_SUBDOMAIN="${N8N_SUBDOMAIN:-n8n}"
+PORTAINER_SUBDOMAIN="${PORTAINER_SUBDOMAIN:-portainer}"
+DOZZLE_SUBDOMAIN="${DOZZLE_SUBDOMAIN:-dozzle}"
+QDRANT_SUBDOMAIN="${QDRANT_SUBDOMAIN:-qdrant}"
+
 # --- Color Functions ---
 info() { echo -e "\033[1;34m[INFO]\033[0m $1"; }
 success() { echo -e "\033[1;32m[SUCCESS]\033[0m $1"; }
@@ -519,26 +525,116 @@ collect_configuration() {
         non_interactive=true
     fi
     
-    # Collect N8N_DOMAIN
+    # Collect main domain for subdomain-based setup
+    local main_domain=""
     if [ -z "$N8N_DOMAIN" ]; then
         if [ "$auto_mode" = "true" ] || [ "$non_interactive" = "true" ]; then
             info "Using IP-based access (no domain configured)"
         else
             if [ -c /dev/tty ] || [ "$FORCE_INTERACTIVE" = "true" ]; then
-                echo -n "Enter domain for n8n (leave empty for IP access): " > /dev/tty
-                read N8N_DOMAIN < /dev/tty || N8N_DOMAIN=""
+                echo
+                info "🌐 Domain Configuration"
+                echo "Enter your main domain (e.g., 'mughal.pro') for subdomain-based setup."
+                echo "This will create subdomains like: n8n.mughal.pro, portainer.mughal.pro, etc."
+                echo "Leave empty for IP-based access (HTTP only)."
+                echo
+                echo -n "Enter your main domain [leave empty for IP access]: " > /dev/tty
+                read main_domain < /dev/tty || main_domain=""
             else
                 info "Non-interactive mode: Using IP-based access"
             fi
         fi
+    else
+        # If N8N_DOMAIN is already set, extract main domain from it
+        if [[ "$N8N_DOMAIN" =~ ^[^.]+\.(.+)$ ]]; then
+            main_domain="${BASH_REMATCH[1]}"
+        else
+            main_domain="$N8N_DOMAIN"
+        fi
     fi
     
-    # Validate and report domain
-    if [ -n "$N8N_DOMAIN" ]; then
-        if [[ ! "$N8N_DOMAIN" =~ ^[a-zA-Z0-9][a-zA-Z0-9\.-]*[a-zA-Z0-9]$ ]]; then
-            warning "Domain format may be invalid: $N8N_DOMAIN"
+    # Configure subdomains if main domain is provided
+    if [ -n "$main_domain" ]; then
+        # Validate main domain format
+        if [[ ! "$main_domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9\.-]*[a-zA-Z0-9]$ ]]; then
+            warning "Domain format may be invalid: $main_domain"
         fi
-        info "🌐 Domain-based setup: $N8N_DOMAIN (HTTPS enabled)"
+        
+        info "🌐 Configuring subdomain-based setup for: $main_domain"
+        echo
+        
+        # Customize subdomains if interactive
+        if [ "$auto_mode" = "false" ] && [ "$non_interactive" = "false" ]; then
+            if [ -c /dev/tty ] || [ "$FORCE_INTERACTIVE" = "true" ]; then
+                info "📝 Subdomain Configuration"
+                echo "You can customize the subdomain names for each service:"
+                echo
+                
+                echo -n "n8n subdomain [${N8N_SUBDOMAIN}]: " > /dev/tty
+                read custom_n8n < /dev/tty || custom_n8n=""
+                N8N_SUBDOMAIN="${custom_n8n:-$N8N_SUBDOMAIN}"
+                
+                echo -n "Portainer subdomain [${PORTAINER_SUBDOMAIN}]: " > /dev/tty
+                read custom_portainer < /dev/tty || custom_portainer=""
+                PORTAINER_SUBDOMAIN="${custom_portainer:-$PORTAINER_SUBDOMAIN}"
+                
+                echo -n "Dozzle (logs) subdomain [${DOZZLE_SUBDOMAIN}]: " > /dev/tty
+                read custom_dozzle < /dev/tty || custom_dozzle=""
+                DOZZLE_SUBDOMAIN="${custom_dozzle:-$DOZZLE_SUBDOMAIN}"
+                
+                echo -n "Qdrant (vector DB) subdomain [${QDRANT_SUBDOMAIN}]: " > /dev/tty
+                read custom_qdrant < /dev/tty || custom_qdrant=""
+                QDRANT_SUBDOMAIN="${custom_qdrant:-$QDRANT_SUBDOMAIN}"
+                
+                echo
+                info "📋 Subdomain Summary:"
+                echo "   • n8n: ${N8N_SUBDOMAIN}.${main_domain}"
+                echo "   • Portainer: ${PORTAINER_SUBDOMAIN}.${main_domain}"
+                echo "   • Dozzle: ${DOZZLE_SUBDOMAIN}.${main_domain}"
+                echo "   • Qdrant: ${QDRANT_SUBDOMAIN}.${main_domain}"
+                echo
+                
+                echo -n "Confirm these subdomains? [Y/n]: " > /dev/tty
+                read confirm < /dev/tty || confirm=""
+                if [[ "${confirm,,}" =~ ^(n|no)$ ]]; then
+                    info "Subdomain configuration cancelled. Exiting..."
+                    exit 0
+                fi
+            fi
+        fi
+        
+        # Set N8N_DOMAIN to the full subdomain
+        N8N_DOMAIN="${N8N_SUBDOMAIN}.${main_domain}"
+        
+        # DNS Warning
+        echo
+        warning "⚠️  DNS CONFIGURATION REQUIRED"
+        echo "Before proceeding, you MUST configure these DNS A records:"
+        echo
+        echo "   ${N8N_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
+        echo "   ${PORTAINER_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
+        echo "   ${DOZZLE_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
+        echo "   ${QDRANT_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
+        echo
+        echo "💡 All subdomains should point to the same server IP address."
+        echo "💡 DNS propagation may take 5-60 minutes depending on your provider."
+        echo "💡 SSL certificates will be automatically generated via Let's Encrypt."
+        echo
+        
+        if [ "$auto_mode" = "false" ] && [ "$non_interactive" = "false" ]; then
+            if [ -c /dev/tty ] || [ "$FORCE_INTERACTIVE" = "true" ]; then
+                echo -n "Have you configured the DNS records? [y/N]: " > /dev/tty
+                read dns_confirm < /dev/tty || dns_confirm=""
+                if [[ ! "${dns_confirm,,}" =~ ^(y|yes)$ ]]; then
+                    warning "Please configure DNS records first, then run the script again."
+                    exit 0
+                fi
+            fi
+        else
+            warning "Auto mode: Assuming DNS records are configured"
+        fi
+        
+        info "🌐 Domain-based setup: $N8N_DOMAIN (HTTPS enabled with subdomains)"
     else
         info "🌐 IP-based setup (HTTP only)"
     fi
@@ -868,6 +964,14 @@ EOF
 
     # Create Caddyfile and Qdrant config if domain provided
     if [ -n "$N8N_DOMAIN" ]; then
+        # Extract root domain from N8N_DOMAIN (e.g., ai.mughal.pro -> mughal.pro)
+        local root_domain
+        if [[ "$N8N_DOMAIN" =~ ^[^.]+\.(.+)$ ]]; then
+            root_domain="${BASH_REMATCH[1]}"
+        else
+            root_domain="$N8N_DOMAIN"
+        fi
+        
         cat > "${SETUP_DIR}/Caddyfile" << EOF
 # Main domain - n8n
 ${N8N_DOMAIN} {
@@ -900,7 +1004,7 @@ ${N8N_DOMAIN} {
 }
 
 # Portainer subdomain
-portainer.${N8N_DOMAIN} {
+${PORTAINER_SUBDOMAIN}.${root_domain} {
     reverse_proxy portainer:9000
     
     header {
@@ -920,7 +1024,7 @@ portainer.${N8N_DOMAIN} {
 }
 
 # Dozzle subdomain
-dozzle.${N8N_DOMAIN} {
+${DOZZLE_SUBDOMAIN}.${root_domain} {
     reverse_proxy dozzle:8080
     
     header {
@@ -940,7 +1044,7 @@ dozzle.${N8N_DOMAIN} {
 }
 
 # Qdrant subdomain
-qdrant.${N8N_DOMAIN} {
+${QDRANT_SUBDOMAIN}.${root_domain} {
     reverse_proxy qdrant:6333 {
         header_up Authorization "Bearer {\$QDRANT_API_KEY}"
     }
@@ -966,15 +1070,15 @@ http://${N8N_DOMAIN} {
     redir https://{host}{uri} permanent
 }
 
-http://portainer.${N8N_DOMAIN} {
+http://${PORTAINER_SUBDOMAIN}.${root_domain} {
     redir https://{host}{uri} permanent
 }
 
-http://dozzle.${N8N_DOMAIN} {
+http://${DOZZLE_SUBDOMAIN}.${root_domain} {
     redir https://{host}{uri} permanent
 }
 
-http://qdrant.${N8N_DOMAIN} {
+http://${QDRANT_SUBDOMAIN}.${root_domain} {
     redir https://{host}{uri} permanent
 }
 EOF
@@ -1150,17 +1254,25 @@ show_results_impl() {
     echo
     
     if [ -n "${N8N_DOMAIN:-}" ]; then
+        # Extract root domain from N8N_DOMAIN (e.g., ai.mughal.pro -> mughal.pro)
+        local root_domain
+        if [[ "$N8N_DOMAIN" =~ ^[^.]+\.(.+)$ ]]; then
+            root_domain="${BASH_REMATCH[1]}"
+        else
+            root_domain="$N8N_DOMAIN"
+        fi
+        
         echo "🌐 n8n: https://${N8N_DOMAIN}"
-        echo "🔧 Qdrant Vector DB: https://qdrant.${N8N_DOMAIN}"
+        echo "🔧 Qdrant Vector DB: https://${QDRANT_SUBDOMAIN}.${root_domain}"
         echo "   └─ API Key: ${QDRANT_API_KEY}"
-        echo "📊 Container Logs: https://dozzle.${N8N_DOMAIN} (Dozzle)"
-        echo "🐳 Docker Management: https://portainer.${N8N_DOMAIN} (Portainer)"
+        echo "📊 Container Logs: https://${DOZZLE_SUBDOMAIN}.${root_domain} (Dozzle)"
+        echo "🐳 Docker Management: https://${PORTAINER_SUBDOMAIN}.${root_domain} (Portainer)"
         echo "   └─ Username: admin | Password: admin123456"
         echo "⚠️  Ensure DNS records point to ${public_ip}:"
         echo "   • ${N8N_DOMAIN} → ${public_ip}"
-        echo "   • portainer.${N8N_DOMAIN} → ${public_ip}"
-        echo "   • dozzle.${N8N_DOMAIN} → ${public_ip}"
-        echo "   • qdrant.${N8N_DOMAIN} → ${public_ip}"
+        echo "   • ${PORTAINER_SUBDOMAIN}.${root_domain} → ${public_ip}"
+        echo "   • ${DOZZLE_SUBDOMAIN}.${root_domain} → ${public_ip}"
+        echo "   • ${QDRANT_SUBDOMAIN}.${root_domain} → ${public_ip}"
         echo "🔒 SSL Certificate: Automatic via Let's Encrypt"
     else
         echo "🌐 n8n: http://${public_ip}:5678"
