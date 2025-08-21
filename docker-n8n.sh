@@ -654,10 +654,11 @@ check_docker_compose() {
 generate_credentials_impl() {
     file_operation "mkdir" "$SETUP_DIR"
     
-    # Generate secure password
+    # Generate secure passwords
     local n8n_password=$(openssl rand -base64 16 | tr -d "=+/\"'" | cut -c1-16)
+    local qdrant_api_key=$(openssl rand -base64 32 | tr -d "=+/\"'" | cut -c1-32)
     
-    if [ ${#n8n_password} -lt 8 ]; then
+    if [ ${#n8n_password} -lt 8 ] || [ ${#qdrant_api_key} -lt 16 ]; then
         return 1
     fi
     
@@ -673,6 +674,9 @@ N8N_BASIC_AUTH_USER=${N8N_USER}
 N8N_BASIC_AUTH_PASSWORD=${n8n_password}
 N8N_LOG_LEVEL=warn
 N8N_METRICS=false
+
+# Qdrant Configuration
+QDRANT_API_KEY=${qdrant_api_key}
 
 # Container Versions
 N8N_VERSION=${N8N_VERSION}
@@ -738,8 +742,11 @@ EOF
     container_name: qdrant
     restart: unless-stopped
     user: "1000:1000"
+    environment:
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
     volumes:
       - qdrant_data:/qdrant/storage
+      - ./qdrant-config.yaml:/qdrant/config/production.yaml:ro
     networks:
       - n8n_network
     healthcheck:
@@ -859,31 +866,15 @@ networks:
     driver: bridge
 EOF
 
-    # Create Caddyfile if domain provided
+    # Create Caddyfile and Qdrant config if domain provided
     if [ -n "$N8N_DOMAIN" ]; then
         cat > "${SETUP_DIR}/Caddyfile" << EOF
-# Main domain configuration with path-based routing
+# Main domain - n8n
 ${N8N_DOMAIN} {
-    # n8n on root path
     reverse_proxy n8n:5678 {
         health_uri /healthz
         health_interval 30s
         health_timeout 5s
-    }
-    
-    # Portainer on /portainer path
-    handle_path /portainer* {
-        reverse_proxy portainer:9000
-    }
-    
-    # Dozzle on /dozzle path  
-    handle_path /dozzle* {
-        reverse_proxy dozzle:8080
-    }
-    
-    # Qdrant on /qdrant path
-    handle_path /qdrant* {
-        reverse_proxy qdrant:6333
     }
     
     # Security headers
@@ -896,27 +887,134 @@ ${N8N_DOMAIN} {
         -Server
     }
     
-    # Enable compression
     encode gzip
     
-    # Enable automatic HTTPS
     tls {
         protocols tls1.2 tls1.3
     }
     
-    # Logging for debugging SSL issues
     log {
         output file /var/log/caddy/access.log
         format json
     }
 }
 
-# Force HTTPS redirect
+# Portainer subdomain
+portainer.${N8N_DOMAIN} {
+    reverse_proxy portainer:9000
+    
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        X-XSS-Protection "1; mode=block"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+    
+    encode gzip
+    
+    tls {
+        protocols tls1.2 tls1.3
+    }
+}
+
+# Dozzle subdomain
+dozzle.${N8N_DOMAIN} {
+    reverse_proxy dozzle:8080
+    
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        X-XSS-Protection "1; mode=block"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+    
+    encode gzip
+    
+    tls {
+        protocols tls1.2 tls1.3
+    }
+}
+
+# Qdrant subdomain
+qdrant.${N8N_DOMAIN} {
+    reverse_proxy qdrant:6333 {
+        header_up Authorization "Bearer {\$QDRANT_API_KEY}"
+    }
+    
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        X-XSS-Protection "1; mode=block"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+    
+    encode gzip
+    
+    tls {
+        protocols tls1.2 tls1.3
+    }
+}
+
+# Force HTTPS redirects
 http://${N8N_DOMAIN} {
+    redir https://{host}{uri} permanent
+}
+
+http://portainer.${N8N_DOMAIN} {
+    redir https://{host}{uri} permanent
+}
+
+http://dozzle.${N8N_DOMAIN} {
+    redir https://{host}{uri} permanent
+}
+
+http://qdrant.${N8N_DOMAIN} {
     redir https://{host}{uri} permanent
 }
 EOF
     fi
+    
+    # Create Qdrant configuration file
+    cat > "${SETUP_DIR}/qdrant-config.yaml" << 'EOF'
+service:
+  # Enable API key authentication
+  api_key: ${QDRANT_API_KEY}
+  
+  # HTTP settings
+  http_port: 6333
+  grpc_port: 6334
+  
+  # Enable CORS for web access
+  enable_cors: true
+  
+  # Logging
+  log_level: INFO
+
+storage:
+  # Storage settings
+  storage_path: /qdrant/storage
+  
+  # Performance settings
+  optimizers:
+    deleted_threshold: 0.2
+    vacuum_min_vector_number: 1000
+    default_segment_number: 0
+    max_segment_size_kb: 5000000
+    memmap_threshold_kb: 200000
+    indexing_threshold_kb: 20000
+    flush_interval_sec: 5
+    max_optimization_threads: 1
+
+cluster:
+  # Disable clustering for single-node setup
+  enabled: false
+EOF
 
     success "Docker Compose configuration created"
 }
@@ -1053,11 +1151,16 @@ show_results_impl() {
     
     if [ -n "${N8N_DOMAIN:-}" ]; then
         echo "🌐 n8n: https://${N8N_DOMAIN}"
-        echo "🔧 Qdrant Vector DB: https://${N8N_DOMAIN}/qdrant"
-        echo "📊 Container Logs: https://${N8N_DOMAIN}/dozzle (Dozzle)"
-        echo "🐳 Docker Management: https://${N8N_DOMAIN}/portainer (Portainer)"
+        echo "🔧 Qdrant Vector DB: https://qdrant.${N8N_DOMAIN}"
+        echo "   └─ API Key: ${QDRANT_API_KEY}"
+        echo "📊 Container Logs: https://dozzle.${N8N_DOMAIN} (Dozzle)"
+        echo "🐳 Docker Management: https://portainer.${N8N_DOMAIN} (Portainer)"
         echo "   └─ Username: admin | Password: admin123456"
-        echo "⚠️  Ensure ${N8N_DOMAIN} DNS points to ${public_ip}"
+        echo "⚠️  Ensure DNS records point to ${public_ip}:"
+        echo "   • ${N8N_DOMAIN} → ${public_ip}"
+        echo "   • portainer.${N8N_DOMAIN} → ${public_ip}"
+        echo "   • dozzle.${N8N_DOMAIN} → ${public_ip}"
+        echo "   • qdrant.${N8N_DOMAIN} → ${public_ip}"
         echo "🔒 SSL Certificate: Automatic via Let's Encrypt"
     else
         echo "🌐 n8n: http://${public_ip}:5678"
