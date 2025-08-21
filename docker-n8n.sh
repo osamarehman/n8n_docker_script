@@ -13,7 +13,7 @@ set -euo pipefail
 
 # --- Configuration ---
 readonly SCRIPT_NAME="n8n Production Stack"
-readonly SCRIPT_VERSION="2.4.0-cleanup-enhanced"
+readonly SCRIPT_VERSION="2.5.1-bugfix-enhanced"
 readonly MIN_RAM_GB=2
 readonly MIN_DISK_GB=8
 readonly SETUP_DIR="/opt/n8n-stack"

@@ -231,6 +231,16 @@ Choose an option:
 - Check internet connectivity
 - Consider running during off-peak hours
 
+#### 5. Domain Concatenation Issues (Fixed in v2.5.1)
+- **Problem**: URLs showing as "n8n.domain.com.domain.com" instead of "n8n.domain.com"
+- **Solution**: Update to latest script version (v2.5.1+)
+- **Manual Fix**: Check `/opt/n8n-stack/.env` for correct subdomain variables
+
+#### 6. Readonly Variable Errors (Fixed in v2.5.1)
+- **Problem**: Errors like "N8N_VERSION: readonly variable" during installation
+- **Solution**: Update to latest script version (v2.5.1+)
+- **Manual Fix**: Remove duplicate version variables from `.env` file if present
+
 ### Manual Cleanup
 If automatic cleanup fails:
 ```bash
@@ -275,6 +285,15 @@ After installation:
 - **Secure password generation** for n8n
 
 ## 🆕 Version History
+
+### v2.5.1-bugfix-enhanced (Latest)
+- 🐛 **FIXED**: Domain concatenation bug causing "n8n.mughal.pro.mughal.pro" instead of "n8n.mughal.pro"
+- 🐛 **FIXED**: Readonly variable conflicts in .env file generation
+- ✅ Enhanced IP detection with multiple fallback services (ifconfig.me → ipv4.icanhazip.com)
+- ✅ Improved subdomain URL construction and display
+- ✅ Better error handling for missing environment variables
+- ✅ Cleaner .env file generation without redundant readonly variables
+- ✅ More reliable domain extraction logic for subdomain routing
 
 ### v2.5.0-subdomain-enhanced
 - ✅ Qdrant API key authentication for secure vector database access
