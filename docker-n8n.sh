@@ -816,6 +816,11 @@ services:
       # Using SQLite instead of PostgreSQL
       - DB_TYPE=sqlite
       - DB_SQLITE_VACUUM_ON_STARTUP=true
+      - DB_SQLITE_POOL_SIZE=5
+      # Security and performance improvements
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_PROXY_HOPS=1
     volumes:
       - n8n_data:/home/node/.n8n
     networks:
@@ -905,7 +910,6 @@ EOF
       - portainer_data:/data
     networks:
       - n8n_network
-    command: --admin-password='$$2y$$10$$TQQOBo/MZuOzKhLhbKmAI.XMJqYa7/zZvvODNfaAwtdu7QnOjrPgK'
 EOF
 
     # Add Portainer ports only if no domain (will be routed through Caddy if domain exists)
