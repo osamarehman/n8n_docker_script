@@ -34,6 +34,8 @@ readonly PORTAINER_VERSION="latest"
 N8N_DOMAIN="${N8N_DOMAIN:-}"
 N8N_USER="${N8N_USER:-}"
 DOCKER_COMPOSE_CMD=""
+FORCE_INTERACTIVE="${FORCE_INTERACTIVE:-false}"
+CLEANUP_ACTION="${CLEANUP_ACTION:-}"
 
 # --- Color Functions ---
 info() { echo -e "\033[1;34m[INFO]\033[0m $1"; }
@@ -85,9 +87,14 @@ error_with_user_choice() {
     echo
     
     while true; do
-        if [ -t 0 ]; then
-            echo -n "Choose an option [r/s/e]: "
-            read -r choice
+        if [ -t 0 ] || [ "$FORCE_INTERACTIVE" = "true" ]; then
+            if [ -c /dev/tty ]; then
+                echo -n "Choose an option [r/s/e]: " > /dev/tty
+                read -r choice < /dev/tty
+            else
+                echo -n "Choose an option [r/s/e]: "
+                read -r choice
+            fi
         else
             echo "Non-interactive mode: exiting due to failure"
             exit 1
@@ -305,6 +312,27 @@ detect_existing_installation() {
 }
 
 prompt_cleanup_choice() {
+    # Check if cleanup action is pre-defined via environment variable
+    if [ -n "$CLEANUP_ACTION" ]; then
+        case "${CLEANUP_ACTION,,}" in
+            keep|k)
+                info "Pre-configured: Keeping existing installation. Exiting..."
+                exit 0
+                ;;
+            clean|c)
+                warning "Pre-configured: Cleaning everything and starting fresh..."
+                return 0
+                ;;
+            exit|e)
+                info "Pre-configured: Exiting without changes..."
+                exit 0
+                ;;
+            *)
+                warning "Invalid CLEANUP_ACTION value: $CLEANUP_ACTION. Using interactive mode."
+                ;;
+        esac
+    fi
+    
     echo "⚠️  An existing n8n installation was detected."
     echo
     echo "Choose an option:"
@@ -314,11 +342,18 @@ prompt_cleanup_choice() {
     echo
     
     while true; do
-        if [ -t 0 ]; then
-            echo -n "Choose an option [k/c/e]: "
-            read -r choice
+        # Force interactive mode if FORCE_INTERACTIVE is true, or if we have a TTY, or if we can access /dev/tty
+        if [ "$FORCE_INTERACTIVE" = "true" ] || [ -t 0 ] || [ -c /dev/tty ]; then
+            if [ -c /dev/tty ]; then
+                echo -n "Choose an option [k/c/e]: " > /dev/tty
+                read -r choice < /dev/tty
+            else
+                echo -n "Choose an option [k/c/e]: "
+                read -r choice
+            fi
         else
             echo "Non-interactive mode: keeping existing installation"
+            echo "💡 Tip: Use CLEANUP_ACTION=clean to force cleanup, or FORCE_INTERACTIVE=true for interactive mode"
             return 1
         fi
         
@@ -329,8 +364,13 @@ prompt_cleanup_choice() {
                 ;;
             c|clean)
                 warning "⚠️  This will permanently delete all n8n data, containers, and configuration!"
-                echo -n "Are you sure? Type 'yes' to confirm: "
-                read -r confirm
+                if [ -c /dev/tty ]; then
+                    echo -n "Are you sure? Type 'yes' to confirm: " > /dev/tty
+                    read -r confirm < /dev/tty
+                else
+                    echo -n "Are you sure? Type 'yes' to confirm: "
+                    read -r confirm
+                fi
                 if [ "$confirm" = "yes" ]; then
                     return 0
                 else
@@ -462,16 +502,20 @@ collect_configuration() {
     local auto_mode=false
     local non_interactive=false
     
-    # Check for auto mode
+    # Check for auto mode or force interactive
     for arg in "$@"; do
-        if [ "$arg" = "--auto" ]; then
-            auto_mode=true
-            break
-        fi
+        case "$arg" in
+            "--auto")
+                auto_mode=true
+                ;;
+            "--force-interactive")
+                FORCE_INTERACTIVE=true
+                ;;
+        esac
     done
     
     # Check if running non-interactively
-    if [ ! -t 0 ] && [ "$auto_mode" = "false" ]; then
+    if [ ! -t 0 ] && [ "$auto_mode" = "false" ] && [ "$FORCE_INTERACTIVE" != "true" ]; then
         non_interactive=true
     fi
     
@@ -480,7 +524,7 @@ collect_configuration() {
         if [ "$auto_mode" = "true" ] || [ "$non_interactive" = "true" ]; then
             info "Using IP-based access (no domain configured)"
         else
-            if [ -c /dev/tty ]; then
+            if [ -c /dev/tty ] || [ "$FORCE_INTERACTIVE" = "true" ]; then
                 echo -n "Enter domain for n8n (leave empty for IP access): " > /dev/tty
                 read N8N_DOMAIN < /dev/tty || N8N_DOMAIN=""
             else
@@ -505,7 +549,7 @@ collect_configuration() {
             N8N_USER="admin@example.com"
             info "Using default username 'admin@example.com'"
         else
-            if [ -c /dev/tty ]; then
+            if [ -c /dev/tty ] || [ "$FORCE_INTERACTIVE" = "true" ]; then
                 echo -n "Enter n8n admin username/email [admin@example.com]: " > /dev/tty
                 read N8N_USER < /dev/tty || N8N_USER=""
                 N8N_USER="${N8N_USER:-admin@example.com}"
