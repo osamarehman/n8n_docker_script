@@ -1,21 +1,27 @@
 #!/bin/bash
 
 # ==============================================================================
-# n8n Production Stack - Simplified & Fixed
+# n8n Production Stack - Simplified & Fixed with Retry Logic
 # - Removed PostgreSQL (uses SQLite instead)
 # - Fixed username validation for emails
 # - Added Portainer for Docker management
 # - Simplified configuration
+# - Added comprehensive retry mechanisms for all operations
 # ==============================================================================
 
 set -euo pipefail
 
 # --- Configuration ---
 readonly SCRIPT_NAME="n8n Production Stack"
-readonly SCRIPT_VERSION="2.2.0-simplified"
+readonly SCRIPT_VERSION="2.3.0-retry-enhanced"
 readonly MIN_RAM_GB=2
 readonly MIN_DISK_GB=8
 readonly SETUP_DIR="/opt/n8n-stack"
+
+# Retry configuration
+readonly MAX_RETRIES=3
+readonly RETRY_DELAY=5
+readonly NETWORK_TIMEOUT=30
 
 # Pinned versions
 readonly N8N_VERSION="1.58.2"
@@ -34,6 +40,180 @@ info() { echo -e "\033[1;34m[INFO]\033[0m $1"; }
 success() { echo -e "\033[1;32m[SUCCESS]\033[0m $1"; }
 warning() { echo -e "\033[1;33m[WARNING]\033[0m $1"; }
 error() { echo -e "\033[1;31m[ERROR]\033[0m $1" >&2; exit 1; }
+retry_info() { echo -e "\033[1;35m[RETRY]\033[0m $1"; }
+
+# --- Retry Framework ---
+retry_with_user_prompt() {
+    local operation_name="$1"
+    local command_func="$2"
+    local attempt=1
+    
+    while [ $attempt -le $MAX_RETRIES ]; do
+        info "Attempting $operation_name (attempt $attempt/$MAX_RETRIES)..."
+        
+        if $command_func; then
+            success "$operation_name completed successfully"
+            return 0
+        else
+            local exit_code=$?
+            warning "$operation_name failed on attempt $attempt/$MAX_RETRIES (exit code: $exit_code)"
+            
+            if [ $attempt -eq $MAX_RETRIES ]; then
+                error_with_user_choice "$operation_name" "$command_func"
+                return $?
+            else
+                retry_info "Waiting $RETRY_DELAY seconds before retry..."
+                sleep $RETRY_DELAY
+                attempt=$((attempt + 1))
+            fi
+        fi
+    done
+}
+
+error_with_user_choice() {
+    local operation_name="$1"
+    local command_func="$2"
+    
+    echo
+    error "❌ $operation_name failed after $MAX_RETRIES attempts!"
+    echo
+    echo "Options:"
+    echo "1) Try again (r/retry)"
+    echo "2) Skip this step (s/skip) - ⚠️  May cause issues"
+    echo "3) Exit script (e/exit)"
+    echo
+    
+    while true; do
+        if [ -t 0 ]; then
+            echo -n "Choose an option [r/s/e]: "
+            read -r choice
+        else
+            echo "Non-interactive mode: exiting due to failure"
+            exit 1
+        fi
+        
+        case "${choice,,}" in
+            r|retry)
+                retry_info "Retrying $operation_name..."
+                if retry_with_user_prompt "$operation_name" "$command_func"; then
+                    return 0
+                fi
+                ;;
+            s|skip)
+                warning "⚠️  Skipping $operation_name - this may cause issues later!"
+                return 0
+                ;;
+            e|exit)
+                error "Exiting script as requested"
+                ;;
+            *)
+                echo "Invalid choice. Please enter 'r' (retry), 's' (skip), or 'e' (exit)"
+                ;;
+        esac
+    done
+}
+
+# --- Network Operations with Retry ---
+safe_curl() {
+    local url="$1"
+    local output_file="${2:-}"
+    local curl_args=("--fail" "--silent" "--show-error" "--location" "--connect-timeout" "$NETWORK_TIMEOUT" "--max-time" "$((NETWORK_TIMEOUT * 2))")
+    
+    if [ -n "$output_file" ]; then
+        curl_args+=("--output" "$output_file")
+    fi
+    
+    curl "${curl_args[@]}" "$url"
+}
+
+safe_wget() {
+    local url="$1"
+    local wget_args=("--quiet" "--timeout=$NETWORK_TIMEOUT" "--tries=1")
+    
+    wget "${wget_args[@]}" "$url"
+}
+
+# --- Docker Operations with Retry ---
+docker_operation() {
+    local operation="$1"
+    shift
+    
+    case "$operation" in
+        "pull")
+            docker pull "$@"
+            ;;
+        "compose_up")
+            $DOCKER_COMPOSE_CMD up -d "$@"
+            ;;
+        "compose_down")
+            $DOCKER_COMPOSE_CMD down "$@"
+            ;;
+        "health_check")
+            local container="$1"
+            local health_url="$2"
+            docker exec "$container" wget --no-verbose --tries=1 --spider "$health_url"
+            ;;
+        *)
+            error "Unknown docker operation: $operation"
+            ;;
+    esac
+}
+
+# --- System Operations with Retry ---
+system_operation() {
+    local operation="$1"
+    shift
+    
+    case "$operation" in
+        "apt_update")
+            apt-get update -y
+            ;;
+        "apt_install")
+            apt-get install -y "$@"
+            ;;
+        "systemctl_enable")
+            systemctl enable "$@"
+            ;;
+        "systemctl_start")
+            systemctl start "$@"
+            ;;
+        "ufw_reset")
+            ufw --force reset >/dev/null 2>&1
+            ;;
+        "ufw_enable")
+            ufw --force enable
+            ;;
+        *)
+            error "Unknown system operation: $operation"
+            ;;
+    esac
+}
+
+# --- File Operations with Retry ---
+file_operation() {
+    local operation="$1"
+    shift
+    
+    case "$operation" in
+        "mkdir")
+            mkdir -p "$@"
+            ;;
+        "chown")
+            chown -R "$@"
+            ;;
+        "chmod")
+            chmod "$@"
+            ;;
+        "create_file")
+            local file_path="$1"
+            local content="$2"
+            echo "$content" > "$file_path"
+            ;;
+        *)
+            error "Unknown file operation: $operation"
+            ;;
+    esac
+}
 
 # --- Fixed Input Collection ---
 collect_configuration() {
@@ -114,10 +294,8 @@ collect_configuration() {
     echo
 }
 
-# --- Check Dependencies ---
-check_system_requirements() {
-    info "Checking VPS system requirements..."
-    
+# --- Check Dependencies with Retry ---
+check_system_requirements_impl() {
     local memory_gb=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024))
     if [ $memory_gb -lt $MIN_RAM_GB ]; then
         error "Insufficient RAM: ${memory_gb}GB. Minimum required: ${MIN_RAM_GB}GB"
@@ -133,40 +311,47 @@ check_system_requirements() {
         error "No CPU cores detected"
     fi
     
-    success "VPS requirements met: ${memory_gb}GB RAM, ${disk_gb}GB disk, ${cpu_cores} CPU cores"
+    info "VPS requirements met: ${memory_gb}GB RAM, ${disk_gb}GB disk, ${cpu_cores} CPU cores"
 }
 
-# --- Install Dependencies ---
+check_system_requirements() {
+    retry_with_user_prompt "System Requirements Check" check_system_requirements_impl
+}
+
+# --- Install Dependencies with Retry ---
+install_dependencies_impl() {
+    system_operation "apt_update"
+    system_operation "apt_install" curl wget ufw htop openssl
+}
+
 install_dependencies() {
-    info "Installing required packages..."
-    
-    apt-get update -y
-    apt-get install -y curl wget ufw htop openssl
-    
-    success "Dependencies installed successfully"
+    retry_with_user_prompt "Package Installation" install_dependencies_impl
 }
 
-# --- Install Docker ---
-install_docker() {
+# --- Install Docker with Retry ---
+install_docker_impl() {
     if docker --version >/dev/null 2>&1; then
         info "Docker already installed: $(docker --version)"
         return 0
     fi
     
-    info "Installing Docker..."
-    curl -fsSL https://get.docker.com | sh
-    systemctl enable docker
-    systemctl start docker
+    info "Downloading and installing Docker..."
+    safe_curl "https://get.docker.com" | sh
     
-    # Wait for Docker to be ready
+    system_operation "systemctl_enable" docker
+    system_operation "systemctl_start" docker
+    
+    # Wait for Docker to be ready and verify
     sleep 5
-    success "Docker installed successfully"
+    docker --version >/dev/null 2>&1
 }
 
-# --- Check Docker Compose ---
-check_docker_compose() {
-    info "Detecting Docker Compose..."
-    
+install_docker() {
+    retry_with_user_prompt "Docker Installation" install_docker_impl
+}
+
+# --- Check Docker Compose with Retry ---
+check_docker_compose_impl() {
     if docker compose version >/dev/null 2>&1; then
         DOCKER_COMPOSE_CMD="docker compose"
         info "Using Docker Compose: $(docker compose version --short 2>/dev/null || echo 'installed')"
@@ -174,21 +359,23 @@ check_docker_compose() {
         DOCKER_COMPOSE_CMD="docker-compose"
         info "Using legacy docker-compose"
     else
-        error "Docker Compose not found"
+        return 1
     fi
 }
 
-# --- Generate Configuration ---
-generate_credentials() {
-    info "Generating secure credentials..."
-    
-    mkdir -p "$SETUP_DIR"
+check_docker_compose() {
+    retry_with_user_prompt "Docker Compose Detection" check_docker_compose_impl
+}
+
+# --- Generate Configuration with Retry ---
+generate_credentials_impl() {
+    file_operation "mkdir" "$SETUP_DIR"
     
     # Generate secure password
     local n8n_password=$(openssl rand -base64 16 | tr -d "=+/\"'" | cut -c1-16)
     
     if [ ${#n8n_password} -lt 8 ]; then
-        error "Failed to generate secure password"
+        return 1
     fi
     
     cat > "${SETUP_DIR}/.env" <<EOF
@@ -215,14 +402,15 @@ PORTAINER_VERSION=${PORTAINER_VERSION}
 ${N8N_DOMAIN:+N8N_DOMAIN=${N8N_DOMAIN}}
 EOF
     
-    chmod 600 "${SETUP_DIR}/.env"
-    success "Credentials generated"
+    file_operation "chmod" 600 "${SETUP_DIR}/.env"
 }
 
-# --- Create Docker Compose ---
-create_docker_compose() {
-    info "Creating Docker Compose configuration..."
-    
+generate_credentials() {
+    retry_with_user_prompt "Credential Generation" generate_credentials_impl
+}
+
+# --- Create Docker Compose with Retry ---
+create_docker_compose_impl() {
     cat > "${SETUP_DIR}/docker-compose.yml" << 'EOF'
 services:
   n8n:
@@ -402,16 +590,18 @@ EOF
     success "Docker Compose configuration created"
 }
 
-# --- Setup Firewall ---
-setup_firewall() {
+create_docker_compose() {
+    retry_with_user_prompt "Docker Compose Creation" create_docker_compose_impl
+}
+
+# --- Setup Firewall with Retry ---
+setup_firewall_impl() {
     if ! command -v ufw >/dev/null 2>&1; then
         warning "UFW not available"
         return 0
     fi
     
-    info "Configuring firewall..."
-    
-    ufw --force reset >/dev/null 2>&1
+    system_operation "ufw_reset"
     ufw default deny incoming
     ufw default allow outgoing
     
@@ -426,50 +616,55 @@ setup_firewall() {
         ufw allow 6333/tcp  # Qdrant
     fi
     
-    ufw --force enable
-    success "Firewall configured"
+    system_operation "ufw_enable"
 }
 
-# --- Deploy Services ---
-deploy_services() {
-    info "Deploying n8n stack..."
-    
+setup_firewall() {
+    retry_with_user_prompt "Firewall Configuration" setup_firewall_impl
+}
+
+# --- Deploy Services with Retry ---
+deploy_services_impl() {
     cd "$SETUP_DIR"
     
     # Create directories with proper permissions
-    info "Setting up data directories..."
-    mkdir -p data/n8n data/qdrant data/portainer
-    chown -R 1000:1000 data/n8n data/qdrant
+    file_operation "mkdir" data/n8n data/qdrant data/portainer
+    file_operation "chown" 1000:1000 data/n8n data/qdrant
     
     # Start services
-    info "Starting containers..."
-    $DOCKER_COMPOSE_CMD up -d
+    docker_operation "compose_up"
     
-    # Wait for services
-    info "Waiting for services to start (this may take 2-3 minutes)..."
+    # Wait for services to initialize
     sleep 45
     
-    # Check n8n specifically
+    # Enhanced health check with retry
     local wait_count=0
-    while [ $wait_count -lt 60 ]; do
-        if docker exec n8n wget --no-verbose --tries=1 --spider http://localhost:5678/healthz >/dev/null 2>&1; then
-            success "n8n is healthy!"
+    local max_wait=300  # 5 minutes total
+    while [ $wait_count -lt $max_wait ]; do
+        if docker_operation "health_check" n8n "http://localhost:5678/healthz"; then
+            info "n8n is healthy!"
             break
         fi
-        echo "Waiting for n8n to be ready... ($wait_count/60)"
+        
+        if [ $wait_count -ge $max_wait ]; then
+            return 1
+        fi
+        
+        echo "Waiting for n8n to be ready... ($wait_count/$max_wait seconds)"
         sleep 5
         wait_count=$((wait_count + 5))
     done
     
-    # Show container status
-    info "Container status:"
+    # Verify container status
     $DOCKER_COMPOSE_CMD ps
-    
-    success "Deployment completed!"
 }
 
-# --- Create Management Script ---
-create_management_script() {
+deploy_services() {
+    retry_with_user_prompt "Service Deployment" deploy_services_impl
+}
+
+# --- Create Management Script with Retry ---
+create_management_script_impl() {
     cat > "${SETUP_DIR}/manage.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
@@ -497,12 +692,19 @@ case "${1:-help}" in
         ;;
 esac
 EOF
-    chmod +x "${SETUP_DIR}/manage.sh"
+    file_operation "chmod" +x "${SETUP_DIR}/manage.sh"
 }
 
-# --- Show Results ---
-show_results() {
-    local public_ip=$(curl -s ifconfig.me 2>/dev/null || echo "your-server-ip")
+create_management_script() {
+    retry_with_user_prompt "Management Script Creation" create_management_script_impl
+}
+
+# --- Show Results with Retry ---
+show_results_impl() {
+    local public_ip
+    if ! public_ip=$(safe_curl "ifconfig.me"); then
+        public_ip="109.123.247.217"
+    fi
     
     # Load credentials
     source "${SETUP_DIR}/.env"
@@ -538,7 +740,12 @@ show_results() {
     echo "   ✓ Automatic HTTPS ${N8N_DOMAIN:+(with ${N8N_DOMAIN})}${N8N_DOMAIN:-"(add domain for HTTPS)"}"
     echo "   ✓ Container monitoring (Dozzle + Portainer)"
     echo "   ✓ Firewall configured"
+    echo "   ✓ Comprehensive retry mechanisms for reliability"
     echo
+}
+
+show_results() {
+    retry_with_user_prompt "Results Display" show_results_impl
 }
 
 # --- Main Function ---
