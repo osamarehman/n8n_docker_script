@@ -11,7 +11,8 @@ A comprehensive, production-ready deployment script for n8n workflow automation 
 - **Log Monitoring** - Dozzle for real-time container logs
 - **Comprehensive Retry Logic** - 3-attempt retry system for all operations
 - **Intelligent Cleanup** - Detects and handles existing installations
-- **Path-based Routing** - Access all services through subpaths when using domain
+- **Subdomain-based Routing** - Access all services through dedicated subdomains when using domain
+- **Qdrant API Key Authentication** - Secure API key for Qdrant vector database access
 - **Latest Container Versions** - Always pulls the most recent images
 
 ## 📋 Prerequisites
@@ -24,7 +25,8 @@ A comprehensive, production-ready deployment script for n8n workflow automation 
 
 - **Network Requirements:**
   - Domain name (optional, for HTTPS)
-  - DNS pointing to your server IP
+  - DNS pointing to your server IP (A record for main domain)
+  - DNS wildcard or individual subdomains (for subdomain routing)
   - Ports 80, 443 open for HTTPS
 
 ## 🔧 Configuration Variables
@@ -98,13 +100,28 @@ curl -fsSL http://sh.mughal.pro/docker-n8n.sh | sudo FORCE_INTERACTIVE=true bash
 curl -fsSL http://sh.mughal.pro/docker-n8n.sh | sudo CLEANUP_ACTION=clean bash
 ```
 
+### 6. DNS Configuration for Subdomain Routing
+When using a domain, configure these DNS records:
+```
+# Main domain (A record)
+yourdomain.com        A    YOUR_SERVER_IP
+
+# Subdomains (A records or CNAME)
+portainer.yourdomain.com   A    YOUR_SERVER_IP
+dozzle.yourdomain.com      A    YOUR_SERVER_IP
+qdrant.yourdomain.com      A    YOUR_SERVER_IP
+
+# Alternative: Wildcard (if supported by your DNS provider)
+*.yourdomain.com           A    YOUR_SERVER_IP
+```
+
 ## 🌐 Access Your Services
 
-### With Domain (HTTPS)
+### With Domain (HTTPS) - Subdomain Routing
 - **n8n**: `https://yourdomain.com`
-- **Portainer**: `https://yourdomain.com/portainer`
-- **Dozzle Logs**: `https://yourdomain.com/dozzle`
-- **Qdrant**: `https://yourdomain.com/qdrant`
+- **Portainer**: `https://portainer.yourdomain.com`
+- **Dozzle Logs**: `https://dozzle.yourdomain.com`
+- **Qdrant**: `https://qdrant.yourdomain.com`
 
 ### Without Domain (HTTP + IP)
 - **n8n**: `http://YOUR_SERVER_IP:5678`
@@ -121,6 +138,11 @@ curl -fsSL http://sh.mughal.pro/docker-n8n.sh | sudo CLEANUP_ACTION=clean bash
 ### Portainer
 - **Username**: `admin`
 - **Password**: `admin123456`
+
+### Qdrant Vector Database
+- **API Key**: Auto-generated (displayed after installation)
+- **Usage**: Required for n8n Qdrant nodes authentication
+- **Location**: Available in `/opt/n8n-stack/.env` as `QDRANT_API_KEY`
 
 ## 🛠️ Management Commands
 
@@ -253,6 +275,13 @@ After installation:
 - **Secure password generation** for n8n
 
 ## 🆕 Version History
+
+### v2.5.0-subdomain-enhanced
+- ✅ Qdrant API key authentication for secure vector database access
+- ✅ Subdomain-based routing (replaces path-based routing)
+- ✅ Enhanced DNS configuration with wildcard support
+- ✅ Improved service isolation and UI compatibility
+- ✅ Auto-generated secure API keys for Qdrant integration
 
 ### v2.4.0-cleanup-enhanced
 - ✅ Comprehensive retry mechanisms (3 attempts + user interaction)
