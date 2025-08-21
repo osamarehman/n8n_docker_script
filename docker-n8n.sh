@@ -30,6 +30,13 @@ readonly CADDY_VERSION="latest"
 readonly DOZZLE_VERSION="latest"
 readonly PORTAINER_VERSION="latest"
 
+# Export variables for Docker Compose
+export N8N_VERSION
+export QDRANT_VERSION
+export CADDY_VERSION
+export DOZZLE_VERSION
+export PORTAINER_VERSION
+
 # Initialize variables
 N8N_DOMAIN="${N8N_DOMAIN:-}"
 N8N_USER="${N8N_USER:-}"

@@ -289,11 +289,13 @@ After installation:
 ### v2.5.1-bugfix-enhanced (Latest)
 - 🐛 **FIXED**: Domain concatenation bug causing "n8n.mughal.pro.mughal.pro" instead of "n8n.mughal.pro"
 - 🐛 **FIXED**: Readonly variable conflicts in .env file generation
+- 🐛 **FIXED**: Docker Compose variable accessibility - exported readonly variables for proper image pulling
 - ✅ Enhanced IP detection with multiple fallback services (ifconfig.me → ipv4.icanhazip.com)
 - ✅ Improved subdomain URL construction and display
 - ✅ Better error handling for missing environment variables
 - ✅ Cleaner .env file generation without redundant readonly variables
 - ✅ More reliable domain extraction logic for subdomain routing
+- ✅ Resolved "variable is not set" warnings during Docker Compose operations
 
 ### v2.5.0-subdomain-enhanced
 - ✅ Qdrant API key authentication for secure vector database access
