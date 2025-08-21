@@ -1,4 +1,4 @@
-# n8n Production Stack - Enhanced with Retry Logic & Cleanup
+# n8n Production Stack - v2.5.2-config-optimized
 
 A comprehensive, production-ready deployment script for n8n workflow automation platform with built-in retry mechanisms, cleanup functionality, and automatic SSL configuration.
 
@@ -136,8 +136,9 @@ qdrant.yourdomain.com      A    YOUR_SERVER_IP
 - **Password**: Auto-generated (displayed after installation)
 
 ### Portainer
-- **Username**: `admin`
-- **Password**: `admin123456`
+- **First-time Setup**: Access via web UI to create admin account
+- **Default Access**: Visit Portainer URL and follow setup wizard
+- **Note**: No hardcoded password - secure setup through web interface
 
 ### Qdrant Vector Database
 - **API Key**: Auto-generated (displayed after installation)
@@ -286,7 +287,19 @@ After installation:
 
 ## 🆕 Version History
 
-### v2.5.1-bugfix-enhanced (Latest)
+### v2.5.2-config-optimized (Latest)
+- 🔧 **OPTIMIZED**: Added n8n security and performance environment variables:
+  - `N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true` - Enhanced file security
+  - `DB_SQLITE_POOL_SIZE=5` - Optimized SQLite connection pooling
+  - `N8N_RUNNERS_ENABLED=true` - Enabled task runners for better performance
+  - `N8N_PROXY_HOPS=1` - Proper proxy trust configuration for Caddy
+- 🔧 **IMPROVED**: Removed hardcoded Portainer admin password to allow first-time web UI setup
+- 🔧 **ENHANCED**: Better n8n configuration for production environments
+- ✅ Resolved n8n warnings about file permissions and SQLite configuration
+- ✅ Fixed Portainer first-time setup process
+- ✅ Improved container security and performance settings
+
+### v2.5.1-bugfix-enhanced
 - 🐛 **FIXED**: Domain concatenation bug causing "n8n.mughal.pro.mughal.pro" instead of "n8n.mughal.pro"
 - 🐛 **FIXED**: Readonly variable conflicts in .env file generation
 - 🐛 **FIXED**: Docker Compose variable accessibility - exported readonly variables for proper image pulling
