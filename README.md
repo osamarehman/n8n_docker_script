@@ -37,6 +37,12 @@ N8N_DOMAIN=""        # Your domain (e.g., "n8n.yourdomain.com") - leave empty fo
 N8N_USER=""          # Admin username/email (default: admin@example.com)
 ```
 
+### Piped Execution Configuration (Environment Variables)
+```bash
+FORCE_INTERACTIVE="true"    # Force interactive mode even when piping from curl
+CLEANUP_ACTION="clean"      # Pre-configure cleanup action: keep|clean|exit
+```
+
 ### System Configuration (Modify in script if needed)
 ```bash
 readonly MIN_RAM_GB=2           # Minimum RAM requirement
@@ -81,6 +87,15 @@ sudo ./docker-n8n.sh
 ### 4. Auto Mode (Non-Interactive)
 ```bash
 sudo N8N_DOMAIN="your-domain.com" N8N_USER="admin@yourdomain.com" ./docker-n8n.sh --auto
+```
+
+### 5. Piped Execution with Interactive Mode
+```bash
+# Force interactive mode when piping from curl
+curl -fsSL http://sh.mughal.pro/docker-n8n.sh | sudo FORCE_INTERACTIVE=true bash
+
+# Or with cleanup action pre-configured
+curl -fsSL http://sh.mughal.pro/docker-n8n.sh | sudo CLEANUP_ACTION=clean bash
 ```
 
 ## 🌐 Access Your Services
