@@ -23,12 +23,12 @@ readonly MAX_RETRIES=3
 readonly RETRY_DELAY=5
 readonly NETWORK_TIMEOUT=30
 
-# Pinned versions
-readonly N8N_VERSION="1.58.2"
-readonly QDRANT_VERSION="v1.7.4"
-readonly CADDY_VERSION="2.7-alpine"
-readonly DOZZLE_VERSION="v6.2.0"
-readonly PORTAINER_VERSION="2.19.4"
+# Latest versions (always pull latest)
+readonly N8N_VERSION="latest"
+readonly QDRANT_VERSION="latest"
+readonly CADDY_VERSION="latest"
+readonly DOZZLE_VERSION="latest"
+readonly PORTAINER_VERSION="latest"
 
 # Initialize variables
 N8N_DOMAIN="${N8N_DOMAIN:-}"
@@ -721,8 +721,6 @@ EOF
     image: amir20/dozzle:${DOZZLE_VERSION}
     container_name: dozzle
     restart: unless-stopped
-    ports:
-      - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -732,20 +730,38 @@ EOF
     read_only: true
     tmpfs:
       - /tmp
+EOF
+
+    # Add Dozzle ports only if no domain (will be routed through Caddy if domain exists)
+    if [ -z "$N8N_DOMAIN" ]; then
+        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+    ports:
+      - "8080:8080"
+EOF
+    fi
+
+    # Add Portainer
+    cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
 
   portainer:
     image: portainer/portainer-ce:${PORTAINER_VERSION}
     container_name: portainer
     restart: unless-stopped
-    ports:
-      - "9000:9000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - portainer_data:/data
     networks:
       - n8n_network
-    command: --admin-password='$$2y$$10$$N5b8jLZXyEoKQwXzT/6LQON8fXnG5/9mE9rL8J7FKkQVmqTGS8W3K'
+    command: --admin-password='$$2y$$10$$TQQOBo/MZuOzKhLhbKmAI.XMJqYa7/zZvvODNfaAwtdu7QnOjrPgK'
 EOF
+
+    # Add Portainer ports only if no domain (will be routed through Caddy if domain exists)
+    if [ -z "$N8N_DOMAIN" ]; then
+        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+    ports:
+      - "9000:9000"
+EOF
+    fi
 
     # Add Caddy for HTTPS if domain provided
     if [ -n "$N8N_DOMAIN" ]; then
@@ -802,24 +818,56 @@ EOF
     # Create Caddyfile if domain provided
     if [ -n "$N8N_DOMAIN" ]; then
         cat > "${SETUP_DIR}/Caddyfile" << EOF
+# Main domain configuration with path-based routing
 ${N8N_DOMAIN} {
+    # n8n on root path
     reverse_proxy n8n:5678 {
         health_uri /healthz
         health_interval 30s
         health_timeout 5s
     }
     
+    # Portainer on /portainer path
+    handle_path /portainer* {
+        reverse_proxy portainer:9000
+    }
+    
+    # Dozzle on /dozzle path  
+    handle_path /dozzle* {
+        reverse_proxy dozzle:8080
+    }
+    
+    # Qdrant on /qdrant path
+    handle_path /qdrant* {
+        reverse_proxy qdrant:6333
+    }
+    
+    # Security headers
     header {
         X-Content-Type-Options nosniff
-        X-Frame-Options DENY
+        X-Frame-Options SAMEORIGIN
         X-XSS-Protection "1; mode=block"
-        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        Referrer-Policy "strict-origin-when-cross-origin"
         -Server
     }
     
+    # Enable compression
     encode gzip
+    
+    # Enable automatic HTTPS
+    tls {
+        protocols tls1.2 tls1.3
+    }
+    
+    # Logging for debugging SSL issues
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
 }
 
+# Force HTTPS redirect
 http://${N8N_DOMAIN} {
     redir https://{host}{uri} permanent
 }
@@ -845,14 +893,15 @@ setup_firewall_impl() {
     ufw default allow outgoing
     
     ufw allow ssh
-    ufw allow 80/tcp
-    ufw allow 443/tcp
-    ufw allow 8080/tcp  # Dozzle
-    ufw allow 9000/tcp  # Portainer
+    ufw allow 80/tcp   # HTTP (redirects to HTTPS)
+    ufw allow 443/tcp  # HTTPS
     
+    # Only allow direct port access if no domain is configured
     if [ -z "${N8N_DOMAIN:-}" ]; then
-        ufw allow 5678/tcp  # n8n
-        ufw allow 6333/tcp  # Qdrant
+        ufw allow 5678/tcp  # n8n direct access
+        ufw allow 6333/tcp  # Qdrant direct access
+        ufw allow 8080/tcp  # Dozzle direct access
+        ufw allow 9000/tcp  # Portainer direct access
     fi
     
     system_operation "ufw_enable"
@@ -956,15 +1005,19 @@ show_results_impl() {
     
     if [ -n "${N8N_DOMAIN:-}" ]; then
         echo "🌐 n8n: https://${N8N_DOMAIN}"
+        echo "🔧 Qdrant Vector DB: https://${N8N_DOMAIN}/qdrant"
+        echo "📊 Container Logs: https://${N8N_DOMAIN}/dozzle (Dozzle)"
+        echo "🐳 Docker Management: https://${N8N_DOMAIN}/portainer (Portainer)"
+        echo "   └─ Username: admin | Password: admin123456"
         echo "⚠️  Ensure ${N8N_DOMAIN} DNS points to ${public_ip}"
+        echo "🔒 SSL Certificate: Automatic via Let's Encrypt"
     else
         echo "🌐 n8n: http://${public_ip}:5678"
         echo "🔧 Qdrant Vector DB: http://${public_ip}:6333"
+        echo "📊 Container Logs: http://${public_ip}:8080 (Dozzle)"
+        echo "🐳 Docker Management: http://${public_ip}:9000 (Portainer)"
+        echo "   └─ Username: admin | Password: admin123456"
     fi
-    
-    echo "📊 Container Logs: http://${public_ip}:8080 (Dozzle)"
-    echo "🐳 Docker Management: http://${public_ip}:9000 (Portainer)"
-    echo "   └─ Default password: admin/admin123456"
     echo
     echo "🔐 n8n Login:"
     echo "   Username: ${N8N_BASIC_AUTH_USER}"
