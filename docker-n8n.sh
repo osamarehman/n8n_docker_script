@@ -13,7 +13,7 @@ set -euo pipefail
 
 # --- Configuration ---
 readonly SCRIPT_NAME="n8n Production Stack"
-readonly SCRIPT_VERSION="2.3.0-retry-enhanced"
+readonly SCRIPT_VERSION="2.4.0-cleanup-enhanced"
 readonly MIN_RAM_GB=2
 readonly MIN_DISK_GB=8
 readonly SETUP_DIR="/opt/n8n-stack"
@@ -41,6 +41,7 @@ success() { echo -e "\033[1;32m[SUCCESS]\033[0m $1"; }
 warning() { echo -e "\033[1;33m[WARNING]\033[0m $1"; }
 error() { echo -e "\033[1;31m[ERROR]\033[0m $1" >&2; exit 1; }
 retry_info() { echo -e "\033[1;35m[RETRY]\033[0m $1"; }
+cleanup_info() { echo -e "\033[1;36m[CLEANUP]\033[0m $1"; }
 
 # --- Retry Framework ---
 retry_with_user_prompt() {
@@ -213,6 +214,244 @@ file_operation() {
             error "Unknown file operation: $operation"
             ;;
     esac
+}
+
+# --- Cleanup Functions ---
+detect_existing_installation() {
+    local has_containers=false
+    local has_config=false
+    local has_volumes=false
+    
+    # Check for existing containers
+    local containers=("n8n" "qdrant" "dozzle" "portainer" "caddy")
+    local existing_containers=()
+    
+    for container in "${containers[@]}"; do
+        if docker ps -a --format "table {{.Names}}" | grep -q "^${container}$"; then
+            existing_containers+=("$container")
+            has_containers=true
+        fi
+    done
+    
+    # Check for existing configuration directory
+    if [ -d "$SETUP_DIR" ]; then
+        has_config=true
+    fi
+    
+    # Check for existing Docker volumes
+    local volumes=("n8n_data" "qdrant_data" "portainer_data" "caddy_data" "caddy_config")
+    local existing_volumes=()
+    
+    for volume in "${volumes[@]}"; do
+        if docker volume ls --format "table {{.Name}}" | grep -q "^${volume}$"; then
+            existing_volumes+=("$volume")
+            has_volumes=true
+        fi
+    done
+    
+    # Check for existing Docker network
+    local has_network=false
+    if docker network ls --format "table {{.Name}}" | grep -q "^n8n_network$"; then
+        has_network=true
+    fi
+    
+    # Return results
+    if [ "$has_containers" = true ] || [ "$has_config" = true ] || [ "$has_volumes" = true ] || [ "$has_network" = true ]; then
+        echo "EXISTING_INSTALLATION_FOUND"
+        
+        # Display what was found
+        echo
+        warning "🔍 Existing n8n installation detected!"
+        echo
+        
+        if [ "$has_containers" = true ]; then
+            echo "📦 Existing containers found:"
+            for container in "${existing_containers[@]}"; do
+                local status=$(docker ps -a --format "table {{.Names}}\t{{.Status}}" | grep "^${container}" | awk '{print $2}')
+                echo "   • $container ($status)"
+            done
+            echo
+        fi
+        
+        if [ "$has_volumes" = true ]; then
+            echo "💾 Existing volumes found:"
+            for volume in "${existing_volumes[@]}"; do
+                echo "   • $volume"
+            done
+            echo
+        fi
+        
+        if [ "$has_config" = true ]; then
+            echo "📁 Configuration directory exists: $SETUP_DIR"
+            if [ -f "$SETUP_DIR/.env" ]; then
+                echo "   • Environment file found"
+            fi
+            if [ -f "$SETUP_DIR/docker-compose.yml" ]; then
+                echo "   • Docker Compose file found"
+            fi
+            echo
+        fi
+        
+        if [ "$has_network" = true ]; then
+            echo "🌐 Docker network 'n8n_network' exists"
+            echo
+        fi
+        
+        return 0
+    else
+        echo "NO_EXISTING_INSTALLATION"
+        return 1
+    fi
+}
+
+prompt_cleanup_choice() {
+    echo "⚠️  An existing n8n installation was detected."
+    echo
+    echo "Choose an option:"
+    echo "1) Keep existing installation and exit (k/keep)"
+    echo "2) Clean everything and start fresh (c/clean)"
+    echo "3) Exit without changes (e/exit)"
+    echo
+    
+    while true; do
+        if [ -t 0 ]; then
+            echo -n "Choose an option [k/c/e]: "
+            read -r choice
+        else
+            echo "Non-interactive mode: keeping existing installation"
+            return 1
+        fi
+        
+        case "${choice,,}" in
+            k|keep)
+                info "Keeping existing installation. Exiting..."
+                exit 0
+                ;;
+            c|clean)
+                warning "⚠️  This will permanently delete all n8n data, containers, and configuration!"
+                echo -n "Are you sure? Type 'yes' to confirm: "
+                read -r confirm
+                if [ "$confirm" = "yes" ]; then
+                    return 0
+                else
+                    info "Cleanup cancelled. Exiting..."
+                    exit 0
+                fi
+                ;;
+            e|exit)
+                info "Exiting without changes..."
+                exit 0
+                ;;
+            *)
+                echo "Invalid choice. Please enter 'k' (keep), 'c' (clean), or 'e' (exit)"
+                ;;
+        esac
+    done
+}
+
+cleanup_containers() {
+    cleanup_info "Stopping and removing containers..."
+    
+    local containers=("n8n" "qdrant" "dozzle" "portainer" "caddy")
+    
+    for container in "${containers[@]}"; do
+        if docker ps -q -f name="^${container}$" | grep -q .; then
+            cleanup_info "Stopping container: $container"
+            docker stop "$container" >/dev/null 2>&1 || true
+        fi
+        
+        if docker ps -aq -f name="^${container}$" | grep -q .; then
+            cleanup_info "Removing container: $container"
+            docker rm "$container" >/dev/null 2>&1 || true
+        fi
+    done
+}
+
+cleanup_volumes() {
+    cleanup_info "Removing Docker volumes..."
+    
+    local volumes=("n8n_data" "qdrant_data" "portainer_data" "caddy_data" "caddy_config")
+    
+    for volume in "${volumes[@]}"; do
+        if docker volume ls -q | grep -q "^${volume}$"; then
+            cleanup_info "Removing volume: $volume"
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+        fi
+    done
+}
+
+cleanup_network() {
+    cleanup_info "Removing Docker network..."
+    
+    if docker network ls -q -f name="^n8n_network$" | grep -q .; then
+        cleanup_info "Removing network: n8n_network"
+        docker network rm n8n_network >/dev/null 2>&1 || true
+    fi
+}
+
+cleanup_configuration() {
+    cleanup_info "Removing configuration files..."
+    
+    if [ -d "$SETUP_DIR" ]; then
+        cleanup_info "Removing directory: $SETUP_DIR"
+        rm -rf "$SETUP_DIR" || true
+    fi
+}
+
+cleanup_images() {
+    cleanup_info "Cleaning up unused Docker images..."
+    
+    # Remove dangling images
+    docker image prune -f >/dev/null 2>&1 || true
+    
+    # Optionally remove n8n stack images (commented out to preserve for reinstall)
+    # local images=("n8nio/n8n" "qdrant/qdrant" "caddy" "amir20/dozzle" "portainer/portainer-ce")
+    # for image in "${images[@]}"; do
+    #     docker rmi $(docker images -q "$image") >/dev/null 2>&1 || true
+    # done
+}
+
+perform_cleanup() {
+    cleanup_info "🧹 Starting cleanup process..."
+    echo
+    
+    # Stop and remove containers
+    cleanup_containers
+    
+    # Remove volumes (this deletes all data!)
+    cleanup_volumes
+    
+    # Remove network
+    cleanup_network
+    
+    # Remove configuration files
+    cleanup_configuration
+    
+    # Clean up unused images
+    cleanup_images
+    
+    success "✅ Cleanup completed successfully!"
+    echo
+    info "All n8n installation components have been removed."
+    info "You can now proceed with a fresh installation."
+    echo
+}
+
+check_and_handle_existing_installation() {
+    info "🔍 Checking for existing n8n installation..."
+    
+    if detect_existing_installation >/dev/null 2>&1; then
+        # Show detection results
+        detect_existing_installation
+        
+        # Prompt user for action
+        prompt_cleanup_choice
+        
+        # If we reach here, user chose to clean
+        perform_cleanup
+    else
+        info "✅ No existing installation found. Proceeding with fresh installation..."
+    fi
 }
 
 # --- Fixed Input Collection ---
@@ -741,6 +980,7 @@ show_results_impl() {
     echo "   ✓ Container monitoring (Dozzle + Portainer)"
     echo "   ✓ Firewall configured"
     echo "   ✓ Comprehensive retry mechanisms for reliability"
+    echo "   ✓ Intelligent cleanup system for existing installations"
     echo
 }
 
@@ -755,6 +995,9 @@ main() {
     fi
     
     info "Starting ${SCRIPT_NAME} v${SCRIPT_VERSION}..."
+    
+    # Check for existing installation and handle cleanup if needed
+    check_and_handle_existing_installation
     
     collect_configuration "$@"
     check_system_requirements
