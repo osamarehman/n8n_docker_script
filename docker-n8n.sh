@@ -1163,6 +1163,25 @@ setup_firewall() {
     retry_with_user_prompt "Firewall Configuration" setup_firewall_impl
 }
 
+# --- Fix Qdrant Volume Permissions with Retry ---
+fix_qdrant_permissions_impl() {
+    info "Fixing Qdrant volume permissions for user 1000:1000..."
+    
+    # Create a temporary container to fix volume ownership
+    docker run --rm -it \
+        -v qdrant_data:/qdrant/storage \
+        alpine sh -c "chown -R 1000:1000 /qdrant/storage && echo 'Permissions fixed successfully'"
+    
+    # Verify the permissions were set correctly
+    docker run --rm \
+        -v qdrant_data:/qdrant/storage \
+        alpine sh -c "ls -la /qdrant/storage"
+}
+
+fix_qdrant_permissions() {
+    retry_with_user_prompt "Qdrant Volume Permissions Fix" fix_qdrant_permissions_impl
+}
+
 # --- Deploy Services with Retry ---
 deploy_services_impl() {
     cd "$SETUP_DIR"
@@ -1174,6 +1193,9 @@ deploy_services_impl() {
     # Pull latest images before starting services
     info "Pulling latest container images..."
     $DOCKER_COMPOSE_CMD pull
+    
+    # Fix Qdrant volume permissions before starting services
+    fix_qdrant_permissions
     
     # Start services
     docker_operation "compose_up"
