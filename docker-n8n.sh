@@ -851,12 +851,7 @@ EOF
       - ./qdrant-config.yaml:/qdrant/config/production.yaml:ro
     networks:
       - n8n_network
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:6333/readiness || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+    
 EOF
 
     # Add Qdrant ports if no domain
