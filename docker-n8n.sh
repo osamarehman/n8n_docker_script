@@ -844,7 +844,6 @@ EOF
     image: qdrant/qdrant:${QDRANT_VERSION}
     container_name: qdrant
     restart: unless-stopped
-    user: "1000:1000"
     environment:
       - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
     volumes:
