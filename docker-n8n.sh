@@ -808,10 +808,6 @@ services:
     restart: unless-stopped
     user: "1000:1000"
     environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
-      - N8N_LOG_LEVEL=${N8N_LOG_LEVEL}
       - TZ=${TZ}
       # Using SQLite instead of PostgreSQL
       - DB_TYPE=sqlite
