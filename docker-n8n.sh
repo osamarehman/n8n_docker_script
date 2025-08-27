@@ -551,10 +551,10 @@ collect_configuration() {
     local auto_mode=false
     local non_interactive=false
     
-    # Check for auto mode or force interactive
+    # Check for auto mode or non-interactive flag
     for arg in "$@"; do
         case "$arg" in
-            "--auto")
+            "--auto"|"--non-interactive")
                 auto_mode=true
                 ;;
             "--force-interactive")
@@ -563,8 +563,8 @@ collect_configuration() {
         esac
     done
     
-    # Check if running non-interactively
-    if [ ! -t 0 ] && [ "$auto_mode" = "false" ] && [ "$FORCE_INTERACTIVE" != "true" ]; then
+    # Interactive by default unless explicitly set to non-interactive
+    if [ "$auto_mode" = "true" ] && [ "$FORCE_INTERACTIVE" != "true" ]; then
         non_interactive=true
     fi
     
@@ -808,7 +808,7 @@ collect_configuration() {
 check_system_requirements_impl() {
     local memory_gb=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024))
     if [ $memory_gb -lt $MIN_RAM_GB ]; then
-        error "Insufficient RAM: ${memory_gb}GB. Minimum required: ${MIN_RAM_GB}GB"
+        warning "Insufficient RAM: ${memory_gb}GB. Minimum recommended: ${MIN_RAM_GB}GB. Proceeding anyway..."
     fi
     
     local disk_gb=$(df / | awk 'NR==2 {print int($4/1024/1024)}')
