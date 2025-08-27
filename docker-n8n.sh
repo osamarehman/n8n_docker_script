@@ -989,6 +989,11 @@ $n8n_image_line
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
       - N8N_RUNNERS_ENABLED=true
       - N8N_PROXY_HOPS=1
+      # Webhook configuration for domain-based setup
+      - WEBHOOK_URL=https://\${N8N_DOMAIN}/
+      - N8N_HOST=\${N8N_DOMAIN}
+      - N8N_PROTOCOL=https
+      - N8N_PORT=443
     volumes:
       - n8n_data:/home/node/.n8n
     networks:
