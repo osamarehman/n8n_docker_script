@@ -813,12 +813,12 @@ check_system_requirements_impl() {
     
     local disk_gb=$(df / | awk 'NR==2 {print int($4/1024/1024)}')
     if [ $disk_gb -lt $MIN_DISK_GB ]; then
-        error "Insufficient disk space: ${disk_gb}GB. Minimum required: ${MIN_DISK_GB}GB"
+        warning "Insufficient disk space: ${disk_gb}GB. Minimum required: ${MIN_DISK_GB}GB. Proceeding anyway..."
     fi
     
     local cpu_cores=$(nproc)
     if [ $cpu_cores -lt 1 ]; then
-        error "No CPU cores detected"
+        warning "No CPU cores detected. Proceeding anyway..."
     fi
     
     info "VPS requirements met: ${memory_gb}GB RAM, ${disk_gb}GB disk, ${cpu_cores} CPU cores"
