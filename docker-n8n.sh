@@ -1,19 +1,21 @@
 #!/bin/bash
 
 # ==============================================================================
-# n8n Production Stack - Simplified & Fixed with Retry Logic
+# n8n Production Stack - Updated with Watchtower (Removed Dozzle)
 # - Removed PostgreSQL (uses SQLite instead)
 # - Fixed username validation for emails
 # - Added Portainer for Docker management
+# - Added Watchtower for automatic container updates
 # - Simplified configuration
 # - Added comprehensive retry mechanisms for all operations
+# - Enhanced existing installation handling with data preservation option
 # ==============================================================================
 
 set -euo pipefail
 
 # --- Configuration ---
 readonly SCRIPT_NAME="n8n Production Stack"
-readonly SCRIPT_VERSION="2.5.2-config-optimized"
+readonly SCRIPT_VERSION="2.6.0-watchtower-edition"
 readonly MIN_RAM_GB=2
 readonly MIN_DISK_GB=8
 readonly SETUP_DIR="/opt/n8n-stack"
@@ -27,14 +29,14 @@ readonly NETWORK_TIMEOUT=30
 readonly N8N_VERSION="latest"
 readonly QDRANT_VERSION="latest"
 readonly CADDY_VERSION="latest"
-readonly DOZZLE_VERSION="latest"
+readonly WATCHTOWER_VERSION="latest"
 readonly PORTAINER_VERSION="latest"
 
 # Export variables for Docker Compose
 export N8N_VERSION
 export QDRANT_VERSION
 export CADDY_VERSION
-export DOZZLE_VERSION
+export WATCHTOWER_VERSION
 export PORTAINER_VERSION
 
 # Initialize variables
@@ -47,14 +49,17 @@ CLEANUP_ACTION="${CLEANUP_ACTION:-}"
 # Optional components configuration
 INSTALL_FFMPEG="${INSTALL_FFMPEG:-}"
 INSTALL_PORTAINER="${INSTALL_PORTAINER:-}"
-INSTALL_DOZZLE="${INSTALL_DOZZLE:-}"
+INSTALL_WATCHTOWER="${INSTALL_WATCHTOWER:-}"
 INSTALL_QDRANT="${INSTALL_QDRANT:-}"
 
 # Subdomain configuration
 N8N_SUBDOMAIN="${N8N_SUBDOMAIN:-n8n}"
 PORTAINER_SUBDOMAIN="${PORTAINER_SUBDOMAIN:-portainer}"
-DOZZLE_SUBDOMAIN="${DOZZLE_SUBDOMAIN:-dozzle}"
 QDRANT_SUBDOMAIN="${QDRANT_SUBDOMAIN:-qdrant}"
+
+# Watchtower configuration
+WATCHTOWER_POLL_INTERVAL="${WATCHTOWER_POLL_INTERVAL:-86400}" # 24 hours default
+WATCHTOWER_CLEANUP="${WATCHTOWER_CLEANUP:-true}"
 
 # --- Color Functions ---
 info() { echo -e "\033[1;34m[INFO]\033[0m $1"; }
@@ -242,7 +247,7 @@ file_operation() {
     esac
 }
 
-# --- Cleanup Functions ---
+# --- Enhanced Cleanup Functions ---
 detect_existing_installation() {
     local has_containers=false
     local has_config=false
@@ -253,8 +258,8 @@ detect_existing_installation() {
     if [ "${INSTALL_QDRANT,,}" = "yes" ] || [ -z "$INSTALL_QDRANT" ]; then
         containers+=("qdrant")
     fi
-    if [ "${INSTALL_DOZZLE,,}" = "yes" ] || [ -z "$INSTALL_DOZZLE" ]; then
-        containers+=("dozzle")
+    if [ "${INSTALL_WATCHTOWER,,}" = "yes" ] || [ -z "$INSTALL_WATCHTOWER" ]; then
+        containers+=("watchtower")
     fi
     if [ "${INSTALL_PORTAINER,,}" = "yes" ] || [ -z "$INSTALL_PORTAINER" ]; then
         containers+=("portainer")
@@ -315,7 +320,7 @@ detect_existing_installation() {
         fi
         
         if [ "$has_volumes" = true ]; then
-            echo "💾 Existing volumes found:"
+            echo "💾 Existing data volumes found:"
             for volume in "${existing_volumes[@]}"; do
                 echo "   • $volume"
             done
@@ -357,6 +362,10 @@ prompt_cleanup_choice() {
                 warning "Pre-configured: Cleaning everything and starting fresh..."
                 return 0
                 ;;
+            fresh|f)
+                warning "Pre-configured: Fresh setup while preserving data volumes..."
+                return 1
+                ;;
             exit|e)
                 info "Pre-configured: Exiting without changes..."
                 exit 0
@@ -371,23 +380,29 @@ prompt_cleanup_choice() {
     echo
     echo "Choose an option:"
     echo "1) Keep existing installation and exit (k/keep)"
-    echo "2) Clean everything and start fresh (c/clean)"
-    echo "3) Exit without changes (e/exit)"
+    echo "2) Clean everything and start completely fresh (c/clean)"
+    echo "3) Fresh setup while preserving data volumes (f/fresh) - RECOMMENDED"
+    echo "4) Exit without changes (e/exit)"
+    echo
+    info "Option 3 (fresh) will:"
+    info "   • Remove old containers and configuration"
+    info "   • Keep your n8n workflows, Qdrant data, and Portainer settings"
+    info "   • Install updated components with new configuration"
     echo
     
     while true; do
         # Force interactive mode if FORCE_INTERACTIVE is true, or if we have a TTY, or if we can access /dev/tty
         if [ "$FORCE_INTERACTIVE" = "true" ] || [ -t 0 ] || [ -c /dev/tty ]; then
             if [ -c /dev/tty ]; then
-                echo -n "Choose an option [k/c/e]: " > /dev/tty
+                echo -n "Choose an option [k/c/f/e]: " > /dev/tty
                 read -r choice < /dev/tty
             else
-                echo -n "Choose an option [k/c/e]: "
+                echo -n "Choose an option [k/c/f/e]: "
                 read -r choice
             fi
         else
             echo "Non-interactive mode: keeping existing installation"
-            echo "💡 Tip: Use CLEANUP_ACTION=clean to force cleanup, or FORCE_INTERACTIVE=true for interactive mode"
+            echo "💡 Tip: Use CLEANUP_ACTION=fresh for preserving data, CLEANUP_ACTION=clean for complete cleanup, or FORCE_INTERACTIVE=true for interactive mode"
             return 1
         fi
         
@@ -397,27 +412,30 @@ prompt_cleanup_choice() {
                 exit 0
                 ;;
             c|clean)
-                warning "⚠️  This will permanently delete all n8n data, containers, and configuration!"
+                warning "⚠️  This will permanently delete ALL data including n8n workflows, Qdrant vectors, and Portainer settings!"
                 if [ -c /dev/tty ]; then
-                    echo -n "Are you sure? Type 'yes' to confirm: " > /dev/tty
+                    echo -n "Are you absolutely sure? Type 'DELETE_ALL_DATA' to confirm: " > /dev/tty
                     read -r confirm < /dev/tty
                 else
-                    echo -n "Are you sure? Type 'yes' to confirm: "
+                    echo -n "Are you absolutely sure? Type 'DELETE_ALL_DATA' to confirm: "
                     read -r confirm
                 fi
-                if [ "$confirm" = "yes" ]; then
-                    return 0
+                if [ "$confirm" = "DELETE_ALL_DATA" ]; then
+                    return 0  # Full cleanup
                 else
-                    info "Cleanup cancelled. Exiting..."
-                    exit 0
+                    info "Complete cleanup cancelled. Choose another option..."
                 fi
+                ;;
+            f|fresh)
+                info "Proceeding with fresh setup while preserving data volumes..."
+                return 1  # Preserve data
                 ;;
             e|exit)
                 info "Exiting without changes..."
                 exit 0
                 ;;
             *)
-                echo "Invalid choice. Please enter 'k' (keep), 'c' (clean), or 'e' (exit)"
+                echo "Invalid choice. Please enter 'k' (keep), 'c' (clean), 'f' (fresh), or 'e' (exit)"
                 ;;
         esac
     done
@@ -430,8 +448,8 @@ cleanup_containers() {
     if [ "${INSTALL_QDRANT,,}" = "yes" ] || [ -z "$INSTALL_QDRANT" ]; then
         containers+=("qdrant")
     fi
-    if [ "${INSTALL_DOZZLE,,}" = "yes" ] || [ -z "$INSTALL_DOZZLE" ]; then
-        containers+=("dozzle")
+    if [ "${INSTALL_WATCHTOWER,,}" = "yes" ] || [ -z "$INSTALL_WATCHTOWER" ]; then
+        containers+=("watchtower")
     fi
     if [ "${INSTALL_PORTAINER,,}" = "yes" ] || [ -z "$INSTALL_PORTAINER" ]; then
         containers+=("portainer")
@@ -494,36 +512,69 @@ cleanup_images() {
     docker image prune -f >/dev/null 2>&1 || true
     
     # Optionally remove n8n stack images (commented out to preserve for reinstall)
-    # local images=("n8nio/n8n" "qdrant/qdrant" "caddy" "amir20/dozzle" "portainer/portainer-ce")
+    # local images=("n8nio/n8n" "qdrant/qdrant" "caddy" "containrrr/watchtower" "portainer/portainer-ce")
     # for image in "${images[@]}"; do
     #     docker rmi $(docker images -q "$image") >/dev/null 2>&1 || true
     # done
 }
 
 perform_cleanup() {
-    cleanup_info "🧹 Starting cleanup process..."
-    echo
+    local preserve_data="${1:-false}"
     
-    # Stop and remove containers
-    cleanup_containers
-    
-    # Remove volumes (this deletes all data!)
-    cleanup_volumes
-    
-    # Remove network
-    cleanup_network
-    
-    # Remove configuration files
-    cleanup_configuration
-    
-    # Clean up unused images
-    cleanup_images
-    
-    success "✅ Cleanup completed successfully!"
-    echo
-    info "All n8n installation components have been removed."
-    info "You can now proceed with a fresh installation."
-    echo
+    if [ "$preserve_data" = "true" ]; then
+        cleanup_info "🧹 Starting fresh setup while preserving data volumes..."
+        echo
+        
+        # Stop and remove containers
+        cleanup_containers
+        
+        # Remove network
+        cleanup_network
+        
+        # Remove configuration files
+        cleanup_configuration
+        
+        # Clean up unused images
+        cleanup_images
+        
+        success "✅ Fresh setup preparation completed!"
+        echo
+        info "Data volumes have been preserved:"
+        info "   • n8n workflows and settings"
+        if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+            info "   • Qdrant vector database"
+        fi
+        if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+            info "   • Portainer configuration"
+        fi
+        echo
+        info "Proceeding with fresh installation using existing data..."
+        echo
+    else
+        cleanup_info "🧹 Starting complete cleanup process..."
+        echo
+        
+        # Stop and remove containers
+        cleanup_containers
+        
+        # Remove volumes (this deletes all data!)
+        cleanup_volumes
+        
+        # Remove network
+        cleanup_network
+        
+        # Remove configuration files
+        cleanup_configuration
+        
+        # Clean up unused images
+        cleanup_images
+        
+        success "✅ Complete cleanup completed successfully!"
+        echo
+        info "All n8n installation components and data have been removed."
+        info "You can now proceed with a fresh installation."
+        echo
+    fi
 }
 
 check_and_handle_existing_installation() {
@@ -534,10 +585,13 @@ check_and_handle_existing_installation() {
         detect_existing_installation
         
         # Prompt user for action
-        prompt_cleanup_choice
-        
-        # If we reach here, user chose to clean
-        perform_cleanup
+        if prompt_cleanup_choice; then
+            # Complete cleanup (return value 0)
+            perform_cleanup false
+        else
+            # Fresh setup preserving data (return value 1)
+            perform_cleanup true
+        fi
     else
         info "✅ No existing installation found. Proceeding with fresh installation..."
     fi
@@ -621,10 +675,6 @@ collect_configuration() {
                 read custom_portainer < /dev/tty || custom_portainer=""
                 PORTAINER_SUBDOMAIN="${custom_portainer:-$PORTAINER_SUBDOMAIN}"
                 
-                echo -n "Dozzle (logs) subdomain [${DOZZLE_SUBDOMAIN}]: " > /dev/tty
-                read custom_dozzle < /dev/tty || custom_dozzle=""
-                DOZZLE_SUBDOMAIN="${custom_dozzle:-$DOZZLE_SUBDOMAIN}"
-                
                 echo -n "Qdrant (vector DB) subdomain [${QDRANT_SUBDOMAIN}]: " > /dev/tty
                 read custom_qdrant < /dev/tty || custom_qdrant=""
                 QDRANT_SUBDOMAIN="${custom_qdrant:-$QDRANT_SUBDOMAIN}"
@@ -633,7 +683,6 @@ collect_configuration() {
                 info "📋 Subdomain Summary:"
                 echo "   • n8n: ${N8N_SUBDOMAIN}.${main_domain}"
                 echo "   • Portainer: ${PORTAINER_SUBDOMAIN}.${main_domain}"
-                echo "   • Dozzle: ${DOZZLE_SUBDOMAIN}.${main_domain}"
                 echo "   • Qdrant: ${QDRANT_SUBDOMAIN}.${main_domain}"
                 echo
                 
@@ -657,9 +706,6 @@ collect_configuration() {
         echo "   ${N8N_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
         if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
             echo "   ${PORTAINER_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
-        fi
-        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
-            echo "   ${DOZZLE_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
         fi
         if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
             echo "   ${QDRANT_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
@@ -759,16 +805,25 @@ collect_configuration() {
                 fi
             fi
             
-            # Dozzle Log Viewer
-            if [ -z "$INSTALL_DOZZLE" ]; then
-                echo -n "Install Dozzle for container log viewing? [Y/n]: " > /dev/tty
-                read dozzle_choice < /dev/tty || dozzle_choice=""
-                if [[ "${dozzle_choice,,}" =~ ^(n|no)$ ]]; then
-                    INSTALL_DOZZLE="no"
-                    info "❌ Dozzle will be skipped"
+            # Watchtower Automatic Updates
+            if [ -z "$INSTALL_WATCHTOWER" ]; then
+                echo -n "Install Watchtower for automatic container updates? (recommended for maintenance) [Y/n]: " > /dev/tty
+                read watchtower_choice < /dev/tty || watchtower_choice=""
+                if [[ "${watchtower_choice,,}" =~ ^(n|no)$ ]]; then
+                    INSTALL_WATCHTOWER="no"
+                    info "❌ Watchtower will be skipped"
                 else
-                    INSTALL_DOZZLE="yes"
-                    info "✅ Dozzle will be installed"
+                    INSTALL_WATCHTOWER="yes"
+                    info "✅ Watchtower will be installed"
+                    
+                    # Ask for Watchtower configuration
+                    echo -n "Watchtower update check interval in hours [24]: " > /dev/tty
+                    read interval_hours < /dev/tty || interval_hours=""
+                    interval_hours="${interval_hours:-24}"
+                    
+                    # Convert hours to seconds
+                    WATCHTOWER_POLL_INTERVAL=$((interval_hours * 3600))
+                    info "✅ Watchtower will check for updates every $interval_hours hours"
                 fi
             fi
             
@@ -779,7 +834,7 @@ collect_configuration() {
         INSTALL_FFMPEG="${INSTALL_FFMPEG:-yes}"
         INSTALL_QDRANT="${INSTALL_QDRANT:-yes}"
         INSTALL_PORTAINER="${INSTALL_PORTAINER:-yes}"
-        INSTALL_DOZZLE="${INSTALL_DOZZLE:-yes}"
+        INSTALL_WATCHTOWER="${INSTALL_WATCHTOWER:-yes}"
         info "Auto mode: Installing all optional components"
     fi
     
@@ -787,7 +842,7 @@ collect_configuration() {
     INSTALL_FFMPEG="${INSTALL_FFMPEG:-yes}"
     INSTALL_QDRANT="${INSTALL_QDRANT:-yes}"
     INSTALL_PORTAINER="${INSTALL_PORTAINER:-yes}"
-    INSTALL_DOZZLE="${INSTALL_DOZZLE:-yes}"
+    INSTALL_WATCHTOWER="${INSTALL_WATCHTOWER:-yes}"
     
     # Configuration summary
     echo
@@ -800,7 +855,12 @@ collect_configuration() {
     info "      • FFmpeg + yt-dlp Media Processing: ${INSTALL_FFMPEG}"
     info "      • Qdrant Vector DB: ${INSTALL_QDRANT}"
     info "      • Portainer Management: ${INSTALL_PORTAINER}"
-    info "      • Dozzle Log Viewer: ${INSTALL_DOZZLE}"
+    if [ "${INSTALL_WATCHTOWER,,}" = "yes" ]; then
+        local hours=$((WATCHTOWER_POLL_INTERVAL / 3600))
+        info "      • Watchtower Auto-Updates: ${INSTALL_WATCHTOWER} (every ${hours}h)"
+    else
+        info "      • Watchtower Auto-Updates: ${INSTALL_WATCHTOWER}"
+    fi
     echo
 }
 
@@ -890,7 +950,7 @@ generate_credentials_impl() {
     fi
     
     cat > "${SETUP_DIR}/.env" <<EOF
-# n8n Production Stack Configuration - Simplified
+# n8n Production Stack Configuration - With Watchtower
 # Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
 # Timezone
@@ -905,13 +965,17 @@ N8N_METRICS=false
 # Qdrant Configuration
 QDRANT_API_KEY=${qdrant_api_key}
 
+# Watchtower Configuration
+WATCHTOWER_POLL_INTERVAL=${WATCHTOWER_POLL_INTERVAL}
+WATCHTOWER_CLEANUP=${WATCHTOWER_CLEANUP}
+WATCHTOWER_LOG_LEVEL=info
+
 # Domain Configuration
 ${N8N_DOMAIN:+N8N_DOMAIN=${N8N_DOMAIN}}
 
 # Subdomain Configuration
 ${N8N_DOMAIN:+N8N_SUBDOMAIN=${N8N_SUBDOMAIN}}
 ${N8N_DOMAIN:+PORTAINER_SUBDOMAIN=${PORTAINER_SUBDOMAIN}}
-${N8N_DOMAIN:+DOZZLE_SUBDOMAIN=${DOZZLE_SUBDOMAIN}}
 ${N8N_DOMAIN:+QDRANT_SUBDOMAIN=${QDRANT_SUBDOMAIN}}
 EOF
     
@@ -974,6 +1038,31 @@ create_docker_compose_impl() {
     
     cat > "${SETUP_DIR}/docker-compose.yml" << EOF
 services:
+EOF
+
+    # Add Watchtower service first (recommended best practice)
+    if [ "${INSTALL_WATCHTOWER,,}" = "yes" ]; then
+        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+  watchtower:
+    container_name: watchtower
+    image: containrrr/watchtower:${WATCHTOWER_VERSION}
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=${WATCHTOWER_CLEANUP}
+      - WATCHTOWER_POLL_INTERVAL=${WATCHTOWER_POLL_INTERVAL}
+      - WATCHTOWER_LOG_LEVEL=${WATCHTOWER_LOG_LEVEL}
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_INCLUDE_STOPPED=false
+    networks:
+      - n8n_network
+
+EOF
+    fi
+
+    # Add main n8n service
+    cat >> "${SETUP_DIR}/docker-compose.yml" << EOF
   n8n:
 $n8n_image_line
     container_name: n8n
@@ -990,8 +1079,8 @@ $n8n_image_line
       - N8N_RUNNERS_ENABLED=true
       - N8N_PROXY_HOPS=1
       # Webhook configuration for domain-based setup
-      - WEBHOOK_URL=https://\${N8N_DOMAIN}/
-      - N8N_HOST=\${N8N_DOMAIN}
+      - WEBHOOK_URL=https://${N8N_DOMAIN}/
+      - N8N_HOST=${N8N_DOMAIN}
       - N8N_PROTOCOL=https
       - N8N_PORT=443
     volumes:
@@ -1036,34 +1125,6 @@ EOF
             cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
     ports:
       - "6333:6333"
-EOF
-        fi
-    fi
-
-    # Add Dozzle (logs viewer) conditionally
-    if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
-        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
-
-  dozzle:
-    image: amir20/dozzle:${DOZZLE_VERSION}
-    container_name: dozzle
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - n8n_network
-    environment:
-      - DOZZLE_NO_ANALYTICS=true
-    read_only: true
-    tmpfs:
-      - /tmp
-EOF
-
-        # Add Dozzle ports only if no domain (will be routed through Caddy if domain exists)
-        if [ -z "$N8N_DOMAIN" ]; then
-            cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
-    ports:
-      - "8080:8080"
 EOF
         fi
     fi
@@ -1224,32 +1285,6 @@ ${PORTAINER_SUBDOMAIN}.${root_domain} {
 EOF
         fi
 
-        # Add Dozzle subdomain conditionally
-        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
-            cat >> "${SETUP_DIR}/Caddyfile" << EOF
-# Dozzle subdomain
-${DOZZLE_SUBDOMAIN}.${root_domain} {
-    reverse_proxy dozzle:8080
-    
-    header {
-        X-Content-Type-Options nosniff
-        X-Frame-Options SAMEORIGIN
-        X-XSS-Protection "1; mode=block"
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-        Referrer-Policy "strict-origin-when-cross-origin"
-        -Server
-    }
-    
-    encode gzip
-    
-    tls {
-        protocols tls1.2 tls1.3
-    }
-}
-
-EOF
-        fi
-
         # Add Qdrant subdomain conditionally
         if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
             cat >> "${SETUP_DIR}/Caddyfile" << EOF
@@ -1290,15 +1325,6 @@ EOF
         if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
             cat >> "${SETUP_DIR}/Caddyfile" << EOF
 http://${PORTAINER_SUBDOMAIN}.${root_domain} {
-    redir https://{host}{uri} permanent
-}
-
-EOF
-        fi
-
-        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
-            cat >> "${SETUP_DIR}/Caddyfile" << EOF
-http://${DOZZLE_SUBDOMAIN}.${root_domain} {
     redir https://{host}{uri} permanent
 }
 
@@ -1382,9 +1408,6 @@ setup_firewall_impl() {
         ufw allow 5678/tcp  # n8n direct access
         if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
             ufw allow 6333/tcp  # Qdrant direct access
-        fi
-        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
-            ufw allow 8080/tcp  # Dozzle direct access
         fi
         if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
             ufw allow 9000/tcp  # Portainer direct access
@@ -1501,9 +1524,29 @@ case "${1:-help}" in
         docker compose pull
         docker compose up -d
         ;;
+    watchtower)
+        case "${2:-status}" in
+            status)
+                echo "=== Watchtower Status ==="
+                docker logs watchtower --tail 20
+                ;;
+            logs)
+                echo "=== Watchtower Logs ==="
+                docker logs watchtower -f
+                ;;
+            force-update)
+                echo "Forcing Watchtower to check for updates now..."
+                docker exec watchtower sh -c "kill -USR1 1"
+                ;;
+            *)
+                echo "Watchtower commands: status, logs, force-update"
+                ;;
+        esac
+        ;;
     *)       
         echo "n8n Stack Management"
-        echo "Usage: $0 {start|stop|restart|logs|status|update}"
+        echo "Usage: $0 {start|stop|restart|logs|status|update|watchtower}"
+        echo "  watchtower: status, logs, force-update"
         ;;
 esac
 EOF
@@ -1544,7 +1587,6 @@ show_results_impl() {
         # Use subdomain variables from .env file or fallback to script defaults
         local n8n_sub="${N8N_SUBDOMAIN:-n8n}"
         local portainer_sub="${PORTAINER_SUBDOMAIN:-portainer}"
-        local dozzle_sub="${DOZZLE_SUBDOMAIN:-dozzle}"
         local qdrant_sub="${QDRANT_SUBDOMAIN:-qdrant}"
         
         echo "🌐 n8n: https://${N8N_DOMAIN}"
@@ -1552,9 +1594,6 @@ show_results_impl() {
         if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
             echo "🔧 Qdrant Vector DB: https://${qdrant_sub}.${root_domain}"
             echo "   └─ API Key: ${QDRANT_API_KEY}"
-        fi
-        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
-            echo "📊 Container Logs: https://${dozzle_sub}.${root_domain} (Dozzle)"
         fi
         if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
             echo "🐳 Docker Management: https://${portainer_sub}.${root_domain} (Portainer)"
@@ -1566,9 +1605,6 @@ show_results_impl() {
         if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
             echo "   • ${portainer_sub}.${root_domain} → ${public_ip}"
         fi
-        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
-            echo "   • ${dozzle_sub}.${root_domain} → ${public_ip}"
-        fi
         if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
             echo "   • ${qdrant_sub}.${root_domain} → ${public_ip}"
         fi
@@ -1577,9 +1613,6 @@ show_results_impl() {
         echo "🌐 n8n: http://${public_ip}:5678"
         if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
             echo "🔧 Qdrant Vector DB: http://${public_ip}:6333"
-        fi
-        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
-            echo "📊 Container Logs: http://${public_ip}:8080 (Dozzle)"
         fi
         if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
             echo "🐳 Docker Management: http://${public_ip}:9000 (Portainer)"
@@ -1593,6 +1626,9 @@ show_results_impl() {
     echo
     echo "📁 Installation: ${SETUP_DIR}"
     echo "🛠️  Management: cd ${SETUP_DIR} && ./manage.sh status"
+    if [ "${INSTALL_WATCHTOWER,,}" = "yes" ]; then
+        echo "🔄 Watchtower: ./manage.sh watchtower status"
+    fi
     echo
     echo "✅ Features:"
     echo "   ✓ SQLite database (no PostgreSQL complexity)"
@@ -1604,10 +1640,12 @@ show_results_impl() {
     fi
     echo "   ✓ Automatic HTTPS ${N8N_DOMAIN:+(with subdomain routing)}${N8N_DOMAIN:-"(add domain for HTTPS)"}"
     local monitoring_features=""
-    if [ "${INSTALL_DOZZLE,,}" = "yes" ] && [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
-        monitoring_features="Container monitoring (Dozzle + Portainer)"
-    elif [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
-        monitoring_features="Container log monitoring (Dozzle)"
+    if [ "${INSTALL_WATCHTOWER,,}" = "yes" ] && [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+        local hours=$((WATCHTOWER_POLL_INTERVAL / 3600))
+        monitoring_features="Automatic updates (Watchtower - every ${hours}h) + Container management (Portainer)"
+    elif [ "${INSTALL_WATCHTOWER,,}" = "yes" ]; then
+        local hours=$((WATCHTOWER_POLL_INTERVAL / 3600))
+        monitoring_features="Automatic container updates (Watchtower - every ${hours}h)"
     elif [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
         monitoring_features="Container management (Portainer)"
     fi
@@ -1616,8 +1654,19 @@ show_results_impl() {
     fi
     echo "   ✓ Firewall configured"
     echo "   ✓ Comprehensive retry mechanisms for reliability"
-    echo "   ✓ Intelligent cleanup system for existing installations"
+    echo "   ✓ Enhanced existing installation handling with data preservation"
     echo
+    if [ "${INSTALL_WATCHTOWER,,}" = "yes" ]; then
+        local hours=$((WATCHTOWER_POLL_INTERVAL / 3600))
+        echo "🔄 Watchtower Information:"
+        echo "   • Update Interval: Every ${hours} hours"
+        echo "   • Cleanup Old Images: ${WATCHTOWER_CLEANUP}"
+        echo "   • Force Check: ./manage.sh watchtower force-update"
+        echo "   • View Logs: ./manage.sh watchtower logs"
+        echo "   • Suitable for: Homelab, development, and testing environments"
+        echo "   ⚠️  Note: Watchtower is not recommended for production environments"
+        echo
+    fi
 }
 
 show_results() {
