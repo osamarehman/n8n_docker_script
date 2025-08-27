@@ -108,10 +108,10 @@ sudo INSTALL_FFMPEG=yes INSTALL_QDRANT=yes INSTALL_PORTAINER=no INSTALL_DOZZLE=n
 ### 6. Piped Execution with Interactive Mode
 ```bash
 # Force interactive mode when piping from curl
-curl -fsSL http://sh.mughal.pro/docker-n8n.sh | sudo FORCE_INTERACTIVE=true bash
+curl -fsSL https://osamarehman.github.io/n8n_docker_script/docker-n8n.sh | sudo FORCE_INTERACTIVE=true bash
 
 # Or with cleanup action pre-configured
-curl -fsSL http://sh.mughal.pro/docker-n8n.sh | sudo CLEANUP_ACTION=clean bash
+curl -fsSL https://osamarehman.github.io/n8n_docker_script/docker-n8n.sh | sudo CLEANUP_ACTION=clean bash
 ```
 
 ### 7. DNS Configuration for Subdomain Routing
