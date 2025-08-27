@@ -44,6 +44,12 @@ DOCKER_COMPOSE_CMD=""
 FORCE_INTERACTIVE="${FORCE_INTERACTIVE:-false}"
 CLEANUP_ACTION="${CLEANUP_ACTION:-}"
 
+# Optional components configuration
+INSTALL_FFMPEG="${INSTALL_FFMPEG:-}"
+INSTALL_PORTAINER="${INSTALL_PORTAINER:-}"
+INSTALL_DOZZLE="${INSTALL_DOZZLE:-}"
+INSTALL_QDRANT="${INSTALL_QDRANT:-}"
+
 # Subdomain configuration
 N8N_SUBDOMAIN="${N8N_SUBDOMAIN:-n8n}"
 PORTAINER_SUBDOMAIN="${PORTAINER_SUBDOMAIN:-portainer}"
@@ -243,7 +249,16 @@ detect_existing_installation() {
     local has_volumes=false
     
     # Check for existing containers
-    local containers=("n8n" "qdrant" "dozzle" "portainer" "caddy")
+    local containers=("n8n" "caddy")
+    if [ "${INSTALL_QDRANT,,}" = "yes" ] || [ -z "$INSTALL_QDRANT" ]; then
+        containers+=("qdrant")
+    fi
+    if [ "${INSTALL_DOZZLE,,}" = "yes" ] || [ -z "$INSTALL_DOZZLE" ]; then
+        containers+=("dozzle")
+    fi
+    if [ "${INSTALL_PORTAINER,,}" = "yes" ] || [ -z "$INSTALL_PORTAINER" ]; then
+        containers+=("portainer")
+    fi
     local existing_containers=()
     
     for container in "${containers[@]}"; do
@@ -259,7 +274,13 @@ detect_existing_installation() {
     fi
     
     # Check for existing Docker volumes
-    local volumes=("n8n_data" "qdrant_data" "portainer_data" "caddy_data" "caddy_config")
+    local volumes=("n8n_data" "caddy_data" "caddy_config")
+    if [ "${INSTALL_QDRANT,,}" = "yes" ] || [ -z "$INSTALL_QDRANT" ]; then
+        volumes+=("qdrant_data")
+    fi
+    if [ "${INSTALL_PORTAINER,,}" = "yes" ] || [ -z "$INSTALL_PORTAINER" ]; then
+        volumes+=("portainer_data")
+    fi
     local existing_volumes=()
     
     for volume in "${volumes[@]}"; do
@@ -405,7 +426,16 @@ prompt_cleanup_choice() {
 cleanup_containers() {
     cleanup_info "Stopping and removing containers..."
     
-    local containers=("n8n" "qdrant" "dozzle" "portainer" "caddy")
+    local containers=("n8n" "caddy")
+    if [ "${INSTALL_QDRANT,,}" = "yes" ] || [ -z "$INSTALL_QDRANT" ]; then
+        containers+=("qdrant")
+    fi
+    if [ "${INSTALL_DOZZLE,,}" = "yes" ] || [ -z "$INSTALL_DOZZLE" ]; then
+        containers+=("dozzle")
+    fi
+    if [ "${INSTALL_PORTAINER,,}" = "yes" ] || [ -z "$INSTALL_PORTAINER" ]; then
+        containers+=("portainer")
+    fi
     
     for container in "${containers[@]}"; do
         if docker ps -q -f name="^${container}$" | grep -q .; then
@@ -423,7 +453,13 @@ cleanup_containers() {
 cleanup_volumes() {
     cleanup_info "Removing Docker volumes..."
     
-    local volumes=("n8n_data" "qdrant_data" "portainer_data" "caddy_data" "caddy_config")
+    local volumes=("n8n_data" "caddy_data" "caddy_config")
+    if [ "${INSTALL_QDRANT,,}" = "yes" ] || [ -z "$INSTALL_QDRANT" ]; then
+        volumes+=("qdrant_data")
+    fi
+    if [ "${INSTALL_PORTAINER,,}" = "yes" ] || [ -z "$INSTALL_PORTAINER" ]; then
+        volumes+=("portainer_data")
+    fi
     
     for volume in "${volumes[@]}"; do
         if docker volume ls -q | grep -q "^${volume}$"; then
@@ -619,9 +655,15 @@ collect_configuration() {
         echo "Before proceeding, you MUST configure these DNS A records:"
         echo
         echo "   ${N8N_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
-        echo "   ${PORTAINER_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
-        echo "   ${DOZZLE_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
-        echo "   ${QDRANT_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
+        if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+            echo "   ${PORTAINER_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
+        fi
+        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
+            echo "   ${DOZZLE_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
+        fi
+        if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+            echo "   ${QDRANT_SUBDOMAIN}.${main_domain} → [YOUR_SERVER_IP]"
+        fi
         echo
         echo "💡 All subdomains should point to the same server IP address."
         echo "💡 DNS propagation may take 5-60 minutes depending on your provider."
@@ -670,6 +712,83 @@ collect_configuration() {
     
     info "👤 Admin username: $N8N_USER"
     
+    # Collect optional component preferences
+    if [ "$auto_mode" = "false" ] && [ "$non_interactive" = "false" ]; then
+        if [ -c /dev/tty ] || [ "$FORCE_INTERACTIVE" = "true" ]; then
+            echo
+            info "📦 Optional Components"
+            echo "Choose which additional components to install:"
+            echo
+            
+            # FFmpeg and yt-dlp for media processing
+            if [ -z "$INSTALL_FFMPEG" ]; then
+                echo -n "Install FFmpeg + yt-dlp for video/audio processing and downloading? (recommended for media workflows) [Y/n]: " > /dev/tty
+                read ffmpeg_choice < /dev/tty || ffmpeg_choice=""
+                if [[ "${ffmpeg_choice,,}" =~ ^(n|no)$ ]]; then
+                    INSTALL_FFMPEG="no"
+                    info "❌ FFmpeg and yt-dlp will be skipped"
+                else
+                    INSTALL_FFMPEG="yes"
+                    info "✅ FFmpeg and yt-dlp will be included in n8n container"
+                fi
+            fi
+            
+            # Qdrant Vector Database
+            if [ -z "$INSTALL_QDRANT" ]; then
+                echo -n "Install Qdrant vector database? (recommended for AI workflows) [Y/n]: " > /dev/tty
+                read qdrant_choice < /dev/tty || qdrant_choice=""
+                if [[ "${qdrant_choice,,}" =~ ^(n|no)$ ]]; then
+                    INSTALL_QDRANT="no"
+                    info "❌ Qdrant vector database will be skipped"
+                else
+                    INSTALL_QDRANT="yes"
+                    info "✅ Qdrant vector database will be installed"
+                fi
+            fi
+            
+            # Portainer Docker Management
+            if [ -z "$INSTALL_PORTAINER" ]; then
+                echo -n "Install Portainer for Docker management? [Y/n]: " > /dev/tty
+                read portainer_choice < /dev/tty || portainer_choice=""
+                if [[ "${portainer_choice,,}" =~ ^(n|no)$ ]]; then
+                    INSTALL_PORTAINER="no"
+                    info "❌ Portainer will be skipped"
+                else
+                    INSTALL_PORTAINER="yes"
+                    info "✅ Portainer will be installed"
+                fi
+            fi
+            
+            # Dozzle Log Viewer
+            if [ -z "$INSTALL_DOZZLE" ]; then
+                echo -n "Install Dozzle for container log viewing? [Y/n]: " > /dev/tty
+                read dozzle_choice < /dev/tty || dozzle_choice=""
+                if [[ "${dozzle_choice,,}" =~ ^(n|no)$ ]]; then
+                    INSTALL_DOZZLE="no"
+                    info "❌ Dozzle will be skipped"
+                else
+                    INSTALL_DOZZLE="yes"
+                    info "✅ Dozzle will be installed"
+                fi
+            fi
+            
+            echo
+        fi
+    else
+        # Auto mode - install all optional components by default
+        INSTALL_FFMPEG="${INSTALL_FFMPEG:-yes}"
+        INSTALL_QDRANT="${INSTALL_QDRANT:-yes}"
+        INSTALL_PORTAINER="${INSTALL_PORTAINER:-yes}"
+        INSTALL_DOZZLE="${INSTALL_DOZZLE:-yes}"
+        info "Auto mode: Installing all optional components"
+    fi
+    
+    # Set defaults for any unset values
+    INSTALL_FFMPEG="${INSTALL_FFMPEG:-yes}"
+    INSTALL_QDRANT="${INSTALL_QDRANT:-yes}"
+    INSTALL_PORTAINER="${INSTALL_PORTAINER:-yes}"
+    INSTALL_DOZZLE="${INSTALL_DOZZLE:-yes}"
+    
     # Configuration summary
     echo
     info "📋 Configuration Summary:"
@@ -677,6 +796,11 @@ collect_configuration() {
     info "   Username: $N8N_USER"
     info "   Database: SQLite (file-based, no PostgreSQL)"
     info "   HTTPS: ${N8N_DOMAIN:+Enabled}${N8N_DOMAIN:-Disabled}"
+    info "   Optional Components:"
+    info "      • FFmpeg + yt-dlp Media Processing: ${INSTALL_FFMPEG}"
+    info "      • Qdrant Vector DB: ${INSTALL_QDRANT}"
+    info "      • Portainer Management: ${INSTALL_PORTAINER}"
+    info "      • Dozzle Log Viewer: ${INSTALL_DOZZLE}"
     echo
 }
 
@@ -798,17 +922,65 @@ generate_credentials() {
     retry_with_user_prompt "Credential Generation" generate_credentials_impl
 }
 
+# --- Create Custom n8n Dockerfile with FFmpeg ---
+create_custom_n8n_dockerfile() {
+    if [ "${INSTALL_FFMPEG,,}" = "yes" ]; then
+        info "Creating custom n8n Dockerfile with FFmpeg and yt-dlp..."
+        
+        cat > "${SETUP_DIR}/Dockerfile.n8n" << 'EOF'
+# Use the official n8n image as base
+FROM n8nio/n8n:latest
+
+# Switch to root to install packages
+USER root
+
+# Install Python3, pip, FFmpeg, and other dependencies using Alpine package manager
+RUN apk add --no-cache \
+    ffmpeg \
+    python3 \
+    py3-pip \
+    && pip3 install --no-cache-dir --break-system-packages yt-dlp
+
+# Switch back to the default user 'node'
+USER node
+EOF
+        
+        # Build the custom image
+        info "Building custom n8n image with FFmpeg and yt-dlp..."
+        cd "$SETUP_DIR"
+        docker build -f Dockerfile.n8n -t n8n-with-media:latest . || {
+            error "Failed to build custom n8n image with FFmpeg and yt-dlp"
+        }
+        
+        # Set the custom image name to use in docker-compose
+        N8N_CUSTOM_IMAGE="n8n-with-media:latest"
+        
+        success "Custom n8n image with FFmpeg and yt-dlp created successfully"
+    else
+        # Use the standard n8n image
+        N8N_CUSTOM_IMAGE="n8nio/n8n:\${N8N_VERSION}"
+    fi
+}
+
 # --- Create Docker Compose with Retry ---
 create_docker_compose_impl() {
-    cat > "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+    # Use the appropriate n8n image (custom with media tools or standard)
+    local n8n_image_line
+    if [ "${INSTALL_FFMPEG,,}" = "yes" ]; then
+        n8n_image_line="    image: n8n-with-media:latest"
+    else
+        n8n_image_line="    image: n8nio/n8n:\${N8N_VERSION}"
+    fi
+    
+    cat > "${SETUP_DIR}/docker-compose.yml" << EOF
 services:
   n8n:
-    image: n8nio/n8n:${N8N_VERSION}
+$n8n_image_line
     container_name: n8n
     restart: unless-stopped
     user: "1000:1000"
     environment:
-      - TZ=${TZ}
+      - TZ=\${TZ}
       # Using SQLite instead of PostgreSQL
       - DB_TYPE=sqlite
       - DB_SQLITE_VACUUM_ON_STARTUP=true
@@ -837,8 +1009,9 @@ EOF
 EOF
     fi
 
-    # Continue with other services
-    cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+    # Add Qdrant service conditionally
+    if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
 
   qdrant:
     image: qdrant/qdrant:${QDRANT_VERSION}
@@ -851,19 +1024,20 @@ EOF
       - ./qdrant-config.yaml:/qdrant/config/production.yaml:ro
     networks:
       - n8n_network
-    
 EOF
 
-    # Add Qdrant ports if no domain
-    if [ -z "$N8N_DOMAIN" ]; then
-        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+        # Add Qdrant ports if no domain
+        if [ -z "$N8N_DOMAIN" ]; then
+            cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
     ports:
       - "6333:6333"
 EOF
+        fi
     fi
 
-    # Add Dozzle (logs viewer)
-    cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+    # Add Dozzle (logs viewer) conditionally
+    if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
+        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
 
   dozzle:
     image: amir20/dozzle:${DOZZLE_VERSION}
@@ -880,16 +1054,18 @@ EOF
       - /tmp
 EOF
 
-    # Add Dozzle ports only if no domain (will be routed through Caddy if domain exists)
-    if [ -z "$N8N_DOMAIN" ]; then
-        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+        # Add Dozzle ports only if no domain (will be routed through Caddy if domain exists)
+        if [ -z "$N8N_DOMAIN" ]; then
+            cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
     ports:
       - "8080:8080"
 EOF
+        fi
     fi
 
-    # Add Portainer
-    cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+    # Add Portainer conditionally
+    if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
 
   portainer:
     image: portainer/portainer-ce:${PORTAINER_VERSION}
@@ -902,12 +1078,13 @@ EOF
       - n8n_network
 EOF
 
-    # Add Portainer ports only if no domain (will be routed through Caddy if domain exists)
-    if [ -z "$N8N_DOMAIN" ]; then
-        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+        # Add Portainer ports only if no domain (will be routed through Caddy if domain exists)
+        if [ -z "$N8N_DOMAIN" ]; then
+            cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
     ports:
       - "9000:9000"
 EOF
+        fi
     fi
 
     # Add Caddy for HTTPS if domain provided
@@ -944,9 +1121,20 @@ EOF
 
 volumes:
   n8n_data:
+EOF
+
+    # Add volumes conditionally based on installed services
+    if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
   qdrant_data:
+EOF
+    fi
+
+    if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
   portainer_data:
 EOF
+    fi
 
     if [ -n "$N8N_DOMAIN" ]; then
         cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
@@ -1003,6 +1191,11 @@ ${N8N_DOMAIN} {
     }
 }
 
+EOF
+
+        # Add Portainer subdomain conditionally
+        if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+            cat >> "${SETUP_DIR}/Caddyfile" << EOF
 # Portainer subdomain
 ${PORTAINER_SUBDOMAIN}.${root_domain} {
     reverse_proxy portainer:9000
@@ -1023,6 +1216,12 @@ ${PORTAINER_SUBDOMAIN}.${root_domain} {
     }
 }
 
+EOF
+        fi
+
+        # Add Dozzle subdomain conditionally
+        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
+            cat >> "${SETUP_DIR}/Caddyfile" << EOF
 # Dozzle subdomain
 ${DOZZLE_SUBDOMAIN}.${root_domain} {
     reverse_proxy dozzle:8080
@@ -1043,6 +1242,12 @@ ${DOZZLE_SUBDOMAIN}.${root_domain} {
     }
 }
 
+EOF
+        fi
+
+        # Add Qdrant subdomain conditionally
+        if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+            cat >> "${SETUP_DIR}/Caddyfile" << EOF
 # Qdrant subdomain
 ${QDRANT_SUBDOMAIN}.${root_domain} {
     reverse_proxy qdrant:6333 {
@@ -1065,27 +1270,48 @@ ${QDRANT_SUBDOMAIN}.${root_domain} {
     }
 }
 
+EOF
+        fi
+
+        # Add HTTPS redirects
+        cat >> "${SETUP_DIR}/Caddyfile" << EOF
 # Force HTTPS redirects
 http://${N8N_DOMAIN} {
     redir https://{host}{uri} permanent
 }
 
+EOF
+
+        if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+            cat >> "${SETUP_DIR}/Caddyfile" << EOF
 http://${PORTAINER_SUBDOMAIN}.${root_domain} {
     redir https://{host}{uri} permanent
 }
 
+EOF
+        fi
+
+        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
+            cat >> "${SETUP_DIR}/Caddyfile" << EOF
 http://${DOZZLE_SUBDOMAIN}.${root_domain} {
     redir https://{host}{uri} permanent
 }
 
+EOF
+        fi
+
+        if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+            cat >> "${SETUP_DIR}/Caddyfile" << EOF
 http://${QDRANT_SUBDOMAIN}.${root_domain} {
     redir https://{host}{uri} permanent
 }
 EOF
+        fi
     fi
     
-    # Create Qdrant configuration file
-    cat > "${SETUP_DIR}/qdrant-config.yaml" << 'EOF'
+    # Create Qdrant configuration file conditionally
+    if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+        cat > "${SETUP_DIR}/qdrant-config.yaml" << 'EOF'
 service:
   # Enable API key authentication
   api_key: ${QDRANT_API_KEY}
@@ -1119,11 +1345,15 @@ cluster:
   # Disable clustering for single-node setup
   enabled: false
 EOF
+    fi
 
     success "Docker Compose configuration created"
 }
 
 create_docker_compose() {
+    # First create custom n8n image if FFmpeg is requested
+    create_custom_n8n_dockerfile
+    # Then create the docker-compose file
     retry_with_user_prompt "Docker Compose Creation" create_docker_compose_impl
 }
 
@@ -1145,9 +1375,15 @@ setup_firewall_impl() {
     # Only allow direct port access if no domain is configured
     if [ -z "${N8N_DOMAIN:-}" ]; then
         ufw allow 5678/tcp  # n8n direct access
-        ufw allow 6333/tcp  # Qdrant direct access
-        ufw allow 8080/tcp  # Dozzle direct access
-        ufw allow 9000/tcp  # Portainer direct access
+        if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+            ufw allow 6333/tcp  # Qdrant direct access
+        fi
+        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
+            ufw allow 8080/tcp  # Dozzle direct access
+        fi
+        if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+            ufw allow 9000/tcp  # Portainer direct access
+        fi
     fi
     
     system_operation "ufw_enable"
@@ -1181,15 +1417,29 @@ deploy_services_impl() {
     cd "$SETUP_DIR"
     
     # Create directories with proper permissions
-    file_operation "mkdir" data/n8n data/qdrant data/portainer
-    file_operation "chown" 1000:1000 data/n8n data/qdrant
+    local dirs="data/n8n"
+    if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+        dirs="$dirs data/qdrant"
+    fi
+    if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+        dirs="$dirs data/portainer"
+    fi
+    file_operation "mkdir" $dirs
+    
+    local chown_dirs="data/n8n"
+    if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+        chown_dirs="$chown_dirs data/qdrant"
+    fi
+    file_operation "chown" 1000:1000 $chown_dirs
     
     # Pull latest images before starting services
     info "Pulling latest container images..."
     $DOCKER_COMPOSE_CMD pull
     
-    # Fix Qdrant volume permissions before starting services
-    fix_qdrant_permissions
+    # Fix Qdrant volume permissions before starting services (only if Qdrant is installed)
+    if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+        fix_qdrant_permissions
+    fi
     
     # Start services
     docker_operation "compose_up"
@@ -1293,23 +1543,43 @@ show_results_impl() {
         local qdrant_sub="${QDRANT_SUBDOMAIN:-qdrant}"
         
         echo "🌐 n8n: https://${N8N_DOMAIN}"
-        echo "🔧 Qdrant Vector DB: https://${qdrant_sub}.${root_domain}"
-        echo "   └─ API Key: ${QDRANT_API_KEY}"
-        echo "📊 Container Logs: https://${dozzle_sub}.${root_domain} (Dozzle)"
-        echo "🐳 Docker Management: https://${portainer_sub}.${root_domain} (Portainer)"
-        echo "   └─ Username: admin | Password: admin123456"
+        
+        if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+            echo "🔧 Qdrant Vector DB: https://${qdrant_sub}.${root_domain}"
+            echo "   └─ API Key: ${QDRANT_API_KEY}"
+        fi
+        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
+            echo "📊 Container Logs: https://${dozzle_sub}.${root_domain} (Dozzle)"
+        fi
+        if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+            echo "🐳 Docker Management: https://${portainer_sub}.${root_domain} (Portainer)"
+            echo "   └─ Username: admin | Password: admin123456"
+        fi
+        
         echo "⚠️  Ensure DNS records point to ${public_ip}:"
         echo "   • ${N8N_DOMAIN} → ${public_ip}"
-        echo "   • ${portainer_sub}.${root_domain} → ${public_ip}"
-        echo "   • ${dozzle_sub}.${root_domain} → ${public_ip}"
-        echo "   • ${qdrant_sub}.${root_domain} → ${public_ip}"
+        if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+            echo "   • ${portainer_sub}.${root_domain} → ${public_ip}"
+        fi
+        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
+            echo "   • ${dozzle_sub}.${root_domain} → ${public_ip}"
+        fi
+        if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+            echo "   • ${qdrant_sub}.${root_domain} → ${public_ip}"
+        fi
         echo "🔒 SSL Certificate: Automatic via Let's Encrypt"
     else
         echo "🌐 n8n: http://${public_ip}:5678"
-        echo "🔧 Qdrant Vector DB: http://${public_ip}:6333"
-        echo "📊 Container Logs: http://${public_ip}:8080 (Dozzle)"
-        echo "🐳 Docker Management: http://${public_ip}:9000 (Portainer)"
-        echo "   └─ Username: admin | Password: admin123456"
+        if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+            echo "🔧 Qdrant Vector DB: http://${public_ip}:6333"
+        fi
+        if [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
+            echo "📊 Container Logs: http://${public_ip}:8080 (Dozzle)"
+        fi
+        if [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+            echo "🐳 Docker Management: http://${public_ip}:9000 (Portainer)"
+            echo "   └─ Username: admin | Password: admin123456"
+        fi
     fi
     echo
     echo "🔐 n8n Login:"
@@ -1321,9 +1591,24 @@ show_results_impl() {
     echo
     echo "✅ Features:"
     echo "   ✓ SQLite database (no PostgreSQL complexity)"
-    echo "   ✓ Qdrant vector database with API key authentication"
+    if [ "${INSTALL_FFMPEG,,}" = "yes" ]; then
+        echo "   ✓ FFmpeg and yt-dlp for video/audio processing and downloading built into n8n container"
+    fi
+    if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+        echo "   ✓ Qdrant vector database with API key authentication"
+    fi
     echo "   ✓ Automatic HTTPS ${N8N_DOMAIN:+(with subdomain routing)}${N8N_DOMAIN:-"(add domain for HTTPS)"}"
-    echo "   ✓ Container monitoring (Dozzle + Portainer)"
+    local monitoring_features=""
+    if [ "${INSTALL_DOZZLE,,}" = "yes" ] && [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+        monitoring_features="Container monitoring (Dozzle + Portainer)"
+    elif [ "${INSTALL_DOZZLE,,}" = "yes" ]; then
+        monitoring_features="Container log monitoring (Dozzle)"
+    elif [ "${INSTALL_PORTAINER,,}" = "yes" ]; then
+        monitoring_features="Container management (Portainer)"
+    fi
+    if [ -n "$monitoring_features" ]; then
+        echo "   ✓ $monitoring_features"
+    fi
     echo "   ✓ Firewall configured"
     echo "   ✓ Comprehensive retry mechanisms for reliability"
     echo "   ✓ Intelligent cleanup system for existing installations"

@@ -5,10 +5,11 @@ A comprehensive, production-ready deployment script for n8n workflow automation 
 ## 🚀 Features
 
 - **n8n Workflow Automation** - Latest version with SQLite database
-- **Qdrant Vector Database** - For AI/ML workflows
+- **FFmpeg + yt-dlp Media Processing** - Optional FFmpeg and yt-dlp integration built into n8n container
+- **Qdrant Vector Database** - Optional AI/ML vector database
 - **Automatic HTTPS** - Let's Encrypt SSL certificates via Caddy
-- **Container Management** - Portainer for Docker management
-- **Log Monitoring** - Dozzle for real-time container logs
+- **Container Management** - Optional Portainer for Docker management
+- **Log Monitoring** - Optional Dozzle for real-time container logs
 - **Comprehensive Retry Logic** - 3-attempt retry system for all operations
 - **Intelligent Cleanup** - Detects and handles existing installations
 - **Subdomain-based Routing** - Access all services through dedicated subdomains when using domain
@@ -91,7 +92,20 @@ sudo ./docker-n8n.sh
 sudo N8N_DOMAIN="your-domain.com" N8N_USER="admin@yourdomain.com" ./docker-n8n.sh --auto
 ```
 
-### 5. Piped Execution with Interactive Mode
+### 5. Pre-configure Optional Components
+You can skip interactive prompts by setting environment variables:
+```bash
+# Install all components
+sudo INSTALL_FFMPEG=yes INSTALL_QDRANT=yes INSTALL_PORTAINER=yes INSTALL_DOZZLE=yes ./docker-n8n.sh
+
+# Minimal installation (only n8n)
+sudo INSTALL_FFMPEG=no INSTALL_QDRANT=no INSTALL_PORTAINER=no INSTALL_DOZZLE=no ./docker-n8n.sh
+
+# Custom selection
+sudo INSTALL_FFMPEG=yes INSTALL_QDRANT=yes INSTALL_PORTAINER=no INSTALL_DOZZLE=no ./docker-n8n.sh
+```
+
+### 6. Piped Execution with Interactive Mode
 ```bash
 # Force interactive mode when piping from curl
 curl -fsSL http://sh.mughal.pro/docker-n8n.sh | sudo FORCE_INTERACTIVE=true bash
@@ -100,7 +114,7 @@ curl -fsSL http://sh.mughal.pro/docker-n8n.sh | sudo FORCE_INTERACTIVE=true bash
 curl -fsSL http://sh.mughal.pro/docker-n8n.sh | sudo CLEANUP_ACTION=clean bash
 ```
 
-### 6. DNS Configuration for Subdomain Routing
+### 7. DNS Configuration for Subdomain Routing
 When using a domain, configure these DNS records:
 ```
 # Main domain (A record)
@@ -167,6 +181,79 @@ cd /opt/n8n-stack
 # Update containers
 ./manage.sh update
 ```
+
+## 🎬 FFmpeg + yt-dlp Integration
+
+FFmpeg and yt-dlp are now integrated directly into the main installation script as optional components.
+
+### Integrated Installation (Recommended)
+When running the main installation script, you'll be prompted to install both tools:
+```
+Install FFmpeg + yt-dlp for video/audio processing and downloading? (recommended for media workflows) [Y/n]:
+```
+
+Both FFmpeg and yt-dlp will be built directly into your n8n Docker image, making them immediately available for workflows.
+
+### Pre-configure Media Tools Installation
+Skip the interactive prompt by setting the environment variable:
+```bash
+# Include FFmpeg + yt-dlp in installation
+sudo INSTALL_FFMPEG=yes ./docker-n8n.sh
+
+# Skip media tools installation
+sudo INSTALL_FFMPEG=no ./docker-n8n.sh
+```
+
+### How It Works
+- Creates a custom Dockerfile that extends the official n8n image
+- Uses Alpine Linux `apk` package manager to install FFmpeg, Python3, and pip
+- Installs yt-dlp via pip3 (latest version)
+- Builds a custom n8n image `n8n-with-media:latest` with both tools included
+- Uses the custom image in your Docker Compose setup
+
+### Common Use Cases in n8n
+
+#### FFmpeg Examples
+- **Convert video formats**: `ffmpeg -i input.mp4 output.avi`
+- **Extract audio**: `ffmpeg -i video.mp4 -vn -acodec copy audio.aac`
+- **Resize video**: `ffmpeg -i input.mp4 -vf scale=1280:720 output.mp4`
+- **Create thumbnail**: `ffmpeg -i video.mp4 -ss 00:00:01.000 -vframes 1 thumb.png`
+- **Convert audio**: `ffmpeg -i input.wav output.mp3`
+
+#### yt-dlp Examples
+- **Download video**: `yt-dlp "https://www.youtube.com/watch?v=VIDEO_ID"`
+- **Extract audio only**: `yt-dlp -x --audio-format mp3 "URL"`
+- **Download playlist**: `yt-dlp -o "%(uploader)s - %(title)s.%(ext)s" "PLAYLIST_URL"`
+- **Get video info**: `yt-dlp --dump-json "URL"`
+- **Download with specific quality**: `yt-dlp -f "best[height<=720]" "URL"`
+
+#### Combined Workflows
+1. Download video with yt-dlp
+2. Process/convert with FFmpeg
+3. Upload to storage or send notifications
+
+### Verify Installation
+Test both tools availability in your n8n container:
+```bash
+# Test FFmpeg
+docker exec n8n ffmpeg -version
+
+# Test yt-dlp
+docker exec n8n yt-dlp --version
+
+# Test Python3 (required for yt-dlp)
+docker exec n8n python3 --version
+```
+
+### Legacy Standalone Installer
+For existing installations that need FFmpeg added later, a standalone installer is available:
+```bash
+wget https://raw.githubusercontent.com/osamarehman/n8n_docker_script/main/install-ffmpeg-n8n.sh
+chmod +x install-ffmpeg-n8n.sh
+./install-ffmpeg-n8n.sh
+```
+
+> **Note**: The integrated installation method is recommended as it includes both FFmpeg and yt-dlp, and ensures compatibility by building them into the container image during initial setup.
 
 ## 🔄 Retry & Error Handling
 

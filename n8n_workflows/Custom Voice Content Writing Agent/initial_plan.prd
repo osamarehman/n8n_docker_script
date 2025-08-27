@@ -1,0 +1,329 @@
+I'll search for current information about n8n's capabilities, especially around video processing and the latest node configurations to provide you with accurate, up-to-date instructions.# N8N Content Ingestion Workflow - Enhanced Instructions for AI Builder
+
+## OBJECTIVE
+Build a comprehensive content ingestion pipeline that processes multiple file formats AND video URLs, extracts advanced writing style patterns, and stores them in Qdrant vector database for future content generation applications.
+
+## WORKFLOW ARCHITECTURE
+**Enhanced Flow**: Upload/URL → Download (if video URL) → Extract Audio → Transcribe → Chunk → Advanced Style Analysis → Embed → Store
+
+---
+
+## PREREQUISITE SETUP
+
+### Docker Environment with Required Tools
+For video processing capabilities, create a custom Dockerfile that includes both ffmpeg and yt-dlp:
+
+```dockerfile
+FROM n8nio/n8n:latest
+
+USER root
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    python3 \
+    python3-pip \
+    curl \
+    wget \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install yt-dlp
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp
+
+# Return to node user for security
+USER node
+```
+
+---
+
+## DETAILED NODE CONFIGURATION
+
+### 1. INPUT LAYER - Enhanced for URLs
+
+**Chat Trigger Node**
+```
+Configuration:
+- Mode: "Hosted Chat"
+- File Upload: ENABLED
+- Authentication: "Basic Auth" (production)
+- Accept Text Input: ENABLED (for video URLs)
+- Max File Size: 100MB
+- Supported Formats: PDF, TXT, MD, MP3, WAV, M4A, DOC, DOCX, MP4, AVI, MOV
+- URL Pattern Detection: Enable for video platform URLs
+```
+
+### 2. INPUT TYPE DETECTION
+
+**Switch Node - Enhanced Input Router**
+```
+Routing Logic:
+Route 1: {{ $json.message && ($json.message.includes('youtube.com') || $json.message.includes('youtu.be') || $json.message.includes('vimeo.com') || $json.message.includes('twitch.tv')) }} → Video URL Processing
+Route 2: {{ $json.mimeType && $json.mimeType.includes('video') }} → Video File Processing  
+Route 3: {{ $json.mimeType && $json.mimeType.includes('audio') }} → Audio Processing
+Route 4: {{ $json.mimeType && $json.mimeType.includes('pdf') }} → PDF Processing
+Route 5: {{ $json.mimeType && ($json.mimeType.includes('text') || $json.mimeType.includes('markdown')) }} → Text Processing
+Route 6: {{ $json.mimeType && ($json.mimeType.includes('application/vnd.openxml') || $json.mimeType.includes('application/msword')) }} → Document Processing
+Default: Error handling
+```
+
+### 3. VIDEO URL PROCESSING BRANCH (NEW)
+
+**Execute Command Node - Video Download**
+Use yt-dlp for video URL downloading:
+```
+Configuration:
+- Command: yt-dlp --extract-audio --audio-format mp3 --audio-quality 0 --output "/tmp/%(title)s.%(ext)s" "{{ $json.message }}"
+- Timeout: 300000 (5 minutes)
+- Working Directory: /tmp
+- Environment Variables: 
+  - PYTHONPATH=/usr/local/lib/python3/site-packages
+```
+
+**Execute Command Node - Audio Extraction from Video Files**
+Use ffmpeg for audio extraction from uploaded video files:
+```
+Configuration:
+- Command: ffmpeg -i "{{ $binary.data.fileName }}" -vn -acodec libmp3lame -ar 44100 -ac 2 -ab 192k "/tmp/extracted_audio.mp3"
+- Timeout: 600000 (10 minutes)
+- Handle Large Files: true
+```
+
+### 4. CONTENT EXTRACTION - UPDATED
+
+**OpenRouter Node - Audio Transcription**
+Using the official OpenRouter Chat Model node available since n8n 1.78:
+```
+Model: "openai/whisper-large-v3"
+Configuration:
+- Operation: Audio Transcription
+- Input: Binary audio data or file path
+- Temperature: 0.1 (for transcription accuracy)
+- Response Format: Text
+- Maximum Tokens: 4000
+- Language: auto-detect
+
+Note: OpenRouter dynamically loads available models based on your account access
+```
+
+**PDF/Document Processing** (unchanged from original)
+```
+Extract From File Node:
+- Data Format: "Automatically Detect by MIME Type"
+- Binary Property: "data"
+- OCR Enabled: true
+```
+
+### 5. INTELLIGENT CHUNKING - OPTIMIZED
+
+**Recursive Character Text Splitter Node**
+Optimized for better style pattern recognition:
+```
+Enhanced Settings:
+- Chunk Size: 1500 characters (increased for better style context)
+- Chunk Overlap: 300 characters (20% overlap for style continuity)
+- Separators: ["\n\n", "\n", ". ", "! ", "? ", " ", ""]
+- Keep Separator: true
+- Language: Auto-detect
+- Add Metadata: 
+  - source_type: "video_url", "video_file", "audio", "pdf", "text"
+  - source_url: (if applicable)
+  - chunk_position: sequential number
+  - timestamp: processing time
+```
+
+### 6. ADVANCED WRITING STYLE ANALYSIS - ENHANCED
+
+**OpenRouter Node - Style Pattern Analysis**
+Using Claude 3.5 Sonnet for superior style analysis:
+```
+Model: "anthropic/claude-3-5-sonnet-20241022"
+Temperature: 0.2
+Max Tokens: 1200
+
+System Prompt:
+"You are an expert writing style analyst. Analyze this text chunk and extract ONLY structural and stylistic writing patterns. Focus on measurable, observable characteristics that define HOW the content is written, not WHAT it says.
+
+LINGUISTIC STRUCTURE:
+- sentence_complexity: "simple" | "compound" | "complex" | "varied"
+- avg_sentence_length: "short" (1-15 words) | "medium" (16-25) | "long" (26-40) | "very_long" (40+)
+- paragraph_organization: "single_sentence" | "short_bursts" | "medium_blocks" | "long_form"
+- punctuation_patterns: "minimal" | "standard" | "emphasis_heavy" | "creative"
+
+VOCABULARY & VOICE:
+- vocabulary_register: "casual" | "conversational" | "professional" | "academic" | "technical"
+- voice_consistency: "active_dominant" | "passive_frequent" | "mixed_strategic"
+- tense_patterns: "present_focused" | "past_narrative" | "mixed_temporal"
+- person_perspective: "first_personal" | "second_direct" | "third_objective" | "mixed_strategic"
+
+CONTENT FORMAT IDENTIFICATION:
+- format_type: "blog_post" | "email" | "social_media" | "newsletter" | "article" | "technical_documentation" | "marketing_copy" | "script" | "transcript"
+- structural_markers: ["headers", "bullets", "numbered_lists", "quotes", "code_blocks", "statistics", "questions", "calls_to_action"]
+
+RHETORICAL ARCHITECTURE:
+- opening_strategy: "direct_statement" | "question_hook" | "story_opener" | "statistic_lead" | "quote_introduction"
+- development_pattern: "chronological" | "problem_solution" | "comparison" | "step_by_step" | "argumentative"
+- transition_mechanics: "explicit_connectors" | "implicit_flow" | "section_breaks" | "question_transitions"
+- conclusion_approach: "summary_recap" | "call_to_action" | "open_question" | "forward_looking" | "circular_return"
+
+SUPPORTING EVIDENCE STYLE:
+- credibility_sources: ["personal_experience", "expert_quotes", "statistics", "research_citations", "case_studies", "examples"]
+- example_integration: "embedded_naturally" | "separate_blocks" | "parenthetical" | "footnoted"
+
+OUTPUT (JSON only - no other text):
+{
+  "sentence_complexity": "",
+  "avg_sentence_length": "",
+  "paragraph_organization": "",
+  "punctuation_patterns": "",
+  "vocabulary_register": "",
+  "voice_consistency": "",
+  "tense_patterns": "",
+  "person_perspective": "",
+  "format_type": "",
+  "structural_markers": [],
+  "opening_strategy": "",
+  "development_pattern": "",
+  "transition_mechanics": "",
+  "conclusion_approach": "",
+  "credibility_sources": [],
+  "example_integration": "",
+  "confidence_score": 0.85
+}"
+```
+
+### 7. ENHANCED EMBEDDING GENERATION
+
+**OpenRouter Node - Advanced Embeddings**
+Use OpenRouter for access to latest embedding models:
+```
+Model: "openai/text-embedding-3-large"
+Configuration:
+- Input Text: Combine original chunk + style analysis JSON
+- Dimensions: 3072
+- Encoding Format: float
+- Batch Size: 25 (optimized for performance)
+- Include Metadata: true
+```
+
+### 8. VECTOR DATABASE STORAGE - OPTIMIZED
+
+**Qdrant Vector Store Node**
+Enhanced configuration for style-based retrieval:
+```
+Operation: "Insert Documents"
+Collection Configuration:
+- Collection Name: "content_style_patterns"
+- Vector Size: 3072
+- Distance Metric: "Cosine"
+- Quantization: "Scalar"
+- HNSW Parameters: 
+  - m: 32 (increased for better recall)
+  - ef_construct: 400
+
+Enhanced Metadata Schema:
+{
+  "source_type": "video_url|video_file|audio|pdf|text|document",
+  "source_identifier": "filename or URL",
+  "format_type": "from style analysis",
+  "chunk_sequence": "position in document",
+  "processing_timestamp": "ISO datetime",
+  "style_profile": "complete style analysis JSON",
+  "content_preview": "first 100 characters",
+  "word_count": "integer",
+  "language_detected": "ISO language code",
+  "quality_score": "analysis confidence score"
+}
+
+Indexing Strategy:
+- Create payload indexes on: format_type, source_type, style_profile.vocabulary_register
+- Enable hybrid search capability
+- Set up collection aliases for different content types
+```
+
+### 9. ERROR HANDLING & VALIDATION
+
+**If Node - Content Quality Gate**
+```
+Condition: {{ $json.style_profile && $json.style_profile.confidence_score > 0.7 && $json.content.length > 100 }}
+True Path: Store in Qdrant
+False Path: Log for manual review or reprocess
+```
+
+**Set Node - Processing Summary**
+```
+Success Response:
+{
+  "status": "success",
+  "processed_items": "{{ $json.chunks_processed }}",
+  "source_type": "{{ $json.detected_source_type }}",
+  "format_identified": "{{ $json.primary_format }}",
+  "style_patterns_extracted": "{{ $json.unique_patterns_count }}",
+  "qdrant_collection": "content_style_patterns",
+  "processing_duration_ms": "{{ $json.workflow_duration }}",
+  "next_steps": "Content available for brand voice analysis and generation"
+}
+```
+
+## WORKFLOW EXECUTION FLOW
+
+```
+Chat Trigger
+    ↓
+Enhanced Input Router (URLs + Files)
+    ↓
+[Video URL Branch]     [Video File Branch]     [Audio Branch]     [PDF Branch]     [Text Branch]
+yt-dlp Download   →    ffmpeg Extract    →     Direct Process →   Extract PDF →    Load Text
+    ↓                      ↓                       ↓                 ↓                ↓
+[All branches merge] → OpenRouter Transcription (if needed)
+    ↓
+Recursive Character Text Splitter (Enhanced)
+    ↓  
+OpenRouter Style Analysis (Claude 3.5 Sonnet)
+    ↓
+Data Merge (Text + Style Patterns)
+    ↓
+OpenRouter Embeddings (text-embedding-3-large)
+    ↓
+Quality Gate (If Node)
+    ↓
+Qdrant Vector Store (Enhanced Schema)
+    ↓
+Processing Summary (Set Node)
+```
+
+## PERFORMANCE OPTIMIZATIONS
+
+### Docker Configuration
+Essential environment variables for large file processing:
+```
+Environment Variables:
+- N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+- N8N_BINARY_DATA_TTL=48
+- EXECUTIONS_DATA_PRUNE=true
+- EXECUTIONS_DATA_MAX_AGE=168
+- N8N_PAYLOAD_SIZE_MAX=256MB
+```
+
+### Qdrant Optimization
+```
+Collection Settings:
+- Shard Number: 2 (for better performance)
+- Replication Factor: 1
+- Write Consistency Factor: 1
+- Payload Storage Type: "InMemory" (faster retrieval)
+- Vector Storage Type: "Memory" (for frequent access)
+```
+
+## VALIDATION CHECKLIST
+
+1. **Test video URL processing** with YouTube, Vimeo, and other platforms
+2. **Verify audio extraction** from various video formats
+3. **Validate style analysis quality** with diverse content types
+4. **Confirm embedding storage** with proper metadata
+5. **Test error handling** for unsupported URLs/files
+6. **Monitor resource usage** during large file processing
+7. **Verify OpenRouter model access** and rate limiting
+
+This enhanced workflow now supports video URLs, provides more sophisticated writing style analysis, and uses the latest n8n capabilities with OpenRouter integration for maximum flexibility and performance.
