@@ -47,7 +47,6 @@ FORCE_INTERACTIVE="${FORCE_INTERACTIVE:-false}"
 CLEANUP_ACTION="${CLEANUP_ACTION:-}"
 
 # Optional components configuration
-INSTALL_FFMPEG="${INSTALL_FFMPEG:-}"
 INSTALL_PORTAINER="${INSTALL_PORTAINER:-}"
 INSTALL_WATCHTOWER="${INSTALL_WATCHTOWER:-}"
 INSTALL_QDRANT="${INSTALL_QDRANT:-}"
@@ -766,19 +765,6 @@ collect_configuration() {
             echo "Choose which additional components to install:"
             echo
             
-            # FFmpeg and yt-dlp for media processing
-            if [ -z "$INSTALL_FFMPEG" ]; then
-                echo -n "Install FFmpeg + yt-dlp for video/audio processing and downloading? (recommended for media workflows) [Y/n]: " > /dev/tty
-                read ffmpeg_choice < /dev/tty || ffmpeg_choice=""
-                if [[ "${ffmpeg_choice,,}" =~ ^(n|no)$ ]]; then
-                    INSTALL_FFMPEG="no"
-                    info "❌ FFmpeg and yt-dlp will be skipped"
-                else
-                    INSTALL_FFMPEG="yes"
-                    info "✅ FFmpeg and yt-dlp will be included in n8n container"
-                fi
-            fi
-            
             # Qdrant Vector Database
             if [ -z "$INSTALL_QDRANT" ]; then
                 echo -n "Install Qdrant vector database? (recommended for AI workflows) [Y/n]: " > /dev/tty
@@ -831,7 +817,6 @@ collect_configuration() {
         fi
     else
         # Auto mode - install all optional components by default
-        INSTALL_FFMPEG="${INSTALL_FFMPEG:-yes}"
         INSTALL_QDRANT="${INSTALL_QDRANT:-yes}"
         INSTALL_PORTAINER="${INSTALL_PORTAINER:-yes}"
         INSTALL_WATCHTOWER="${INSTALL_WATCHTOWER:-yes}"
@@ -839,7 +824,6 @@ collect_configuration() {
     fi
     
     # Set defaults for any unset values
-    INSTALL_FFMPEG="${INSTALL_FFMPEG:-yes}"
     INSTALL_QDRANT="${INSTALL_QDRANT:-yes}"
     INSTALL_PORTAINER="${INSTALL_PORTAINER:-yes}"
     INSTALL_WATCHTOWER="${INSTALL_WATCHTOWER:-yes}"
@@ -852,7 +836,6 @@ collect_configuration() {
     info "   Database: SQLite (file-based, no PostgreSQL)"
     info "   HTTPS: ${N8N_DOMAIN:+Enabled}${N8N_DOMAIN:-Disabled}"
     info "   Optional Components:"
-    info "      • FFmpeg + yt-dlp Media Processing: ${INSTALL_FFMPEG}"
     info "      • Qdrant Vector DB: ${INSTALL_QDRANT}"
     info "      • Portainer Management: ${INSTALL_PORTAINER}"
     if [ "${INSTALL_WATCHTOWER,,}" = "yes" ]; then
@@ -986,61 +969,55 @@ generate_credentials() {
     retry_with_user_prompt "Credential Generation" generate_credentials_impl
 }
 
-# --- Create Custom n8n Dockerfile with FFmpeg ---
-create_custom_n8n_dockerfile() {
-    if [ "${INSTALL_FFMPEG,,}" = "yes" ]; then
-        info "Creating custom n8n Dockerfile with FFmpeg and yt-dlp..."
-        
-        cat > "${SETUP_DIR}/Dockerfile.n8n" << 'EOF'
-# Use the official n8n image as base
-FROM n8nio/n8n:latest
-
-# Switch to root to install packages
-USER root
-
-# Install Python3, pip, FFmpeg, and other dependencies using Alpine package manager
-RUN apk add --no-cache \
-    ffmpeg \
-    python3 \
-    py3-pip \
-    && pip3 install --no-cache-dir --break-system-packages yt-dlp
-
-# Switch back to the default user 'node'
-USER node
-EOF
-        
-        # Build the custom image
-        info "Building custom n8n image with FFmpeg and yt-dlp..."
-        cd "$SETUP_DIR"
-        docker build -f Dockerfile.n8n -t n8n-with-media:latest . || {
-            error "Failed to build custom n8n image with FFmpeg and yt-dlp"
-        }
-        
-        # Set the custom image name to use in docker-compose
-        N8N_CUSTOM_IMAGE="n8n-with-media:latest"
-        
-        success "Custom n8n image with FFmpeg and yt-dlp created successfully"
-    else
-        # Use the standard n8n image
-        N8N_CUSTOM_IMAGE="n8nio/n8n:\${N8N_VERSION}"
-    fi
-}
-
 # --- Create Docker Compose with Retry ---
 create_docker_compose_impl() {
-    # Use the appropriate n8n image (custom with media tools or standard)
-    local n8n_image_line
-    if [ "${INSTALL_FFMPEG,,}" = "yes" ]; then
-        n8n_image_line="    image: n8n-with-media:latest"
-    else
-        n8n_image_line="    image: n8nio/n8n:\${N8N_VERSION}"
-    fi
+    # Use the standard n8n image
+    local n8n_image_line="    image: n8nio/n8n:\${N8N_VERSION}"
     
     cat > "${SETUP_DIR}/docker-compose.yml" << EOF
 services:
 EOF
 
-    # Add Watchtower service first (recommended best practice)
+    # Add volume initialization service to fix permissions automatically
+    cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+  n8n-init:
+    image: alpine:latest
+    volumes:
+      - n8n_data:/n8n-data
+EOF
+    
+    if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+      - qdrant_data:/qdrant-data
+EOF
+    fi
+    
+    cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+    command: |
+      sh -c "
+        echo 'Fixing volume permissions for n8n (user 1000:1000)...'
+        chown -R 1000:1000 /n8n-data
+        echo 'n8n volume permissions fixed'
+EOF
+    
+    if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+        cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+        echo 'Fixing volume permissions for Qdrant (user 1000:1000)...'
+        chown -R 1000:1000 /qdrant-data
+        echo 'Qdrant volume permissions fixed'
+EOF
+    fi
+    
+    cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
+        echo 'All volume permissions have been set correctly'
+      "
+    restart: "no"
+    networks:
+      - n8n_network
+
+EOF
+
+    # Add Watchtower service (recommended best practice)
     if [ "${INSTALL_WATCHTOWER,,}" = "yes" ]; then
         cat >> "${SETUP_DIR}/docker-compose.yml" << 'EOF'
   watchtower:
@@ -1068,6 +1045,8 @@ $n8n_image_line
     container_name: n8n
     restart: unless-stopped
     user: "1000:1000"
+    depends_on:
+      - n8n-init
     environment:
       - TZ=\${TZ}
       # Using SQLite instead of PostgreSQL
@@ -1382,9 +1361,7 @@ EOF
 }
 
 create_docker_compose() {
-    # First create custom n8n image if FFmpeg is requested
-    create_custom_n8n_dockerfile
-    # Then create the docker-compose file
+    # Create the docker-compose file with standard n8n image
     retry_with_user_prompt "Docker Compose Creation" create_docker_compose_impl
 }
 
@@ -1699,9 +1676,7 @@ show_results_impl() {
     echo
     echo "✅ Features:"
     echo "   ✓ SQLite database (no PostgreSQL complexity)"
-    if [ "${INSTALL_FFMPEG,,}" = "yes" ]; then
-        echo "   ✓ FFmpeg and yt-dlp for video/audio processing and downloading built into n8n container"
-    fi
+    echo "   ✓ Standard n8n image (no custom modifications)"
     if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
         echo "   ✓ Qdrant vector database with API key authentication"
     fi
