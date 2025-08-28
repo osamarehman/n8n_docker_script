@@ -1421,23 +1421,39 @@ setup_firewall() {
     retry_with_user_prompt "Firewall Configuration" setup_firewall_impl
 }
 
-# --- Fix Qdrant Volume Permissions with Retry ---
-fix_qdrant_permissions_impl() {
-    info "Fixing Qdrant volume permissions for user 1000:1000..."
+# --- Fix Volume Permissions with Retry ---
+fix_volume_permissions_impl() {
+    info "Fixing volume permissions for user 1000:1000..."
     
-    # Create a temporary container to fix volume ownership
-    docker run --rm -it \
-        -v qdrant_data:/qdrant/storage \
-        alpine sh -c "chown -R 1000:1000 /qdrant/storage && echo 'Permissions fixed successfully'"
-    
-    # Verify the permissions were set correctly
+    # Fix n8n volume permissions - CRITICAL for n8n to work
+    info "Fixing n8n data volume permissions..."
     docker run --rm \
-        -v qdrant_data:/qdrant/storage \
-        alpine sh -c "ls -la /qdrant/storage"
+        -v n8n_data:/fix \
+        alpine sh -c "chown -R 1000:1000 /fix && echo 'n8n volume permissions fixed'"
+    
+    # Verify n8n volume permissions
+    docker run --rm \
+        -v n8n_data:/check \
+        alpine sh -c "ls -la /check" || true
+    
+    # Fix Qdrant volume permissions if installed
+    if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
+        info "Fixing Qdrant data volume permissions..."
+        docker run --rm \
+            -v qdrant_data:/fix \
+            alpine sh -c "chown -R 1000:1000 /fix && echo 'Qdrant volume permissions fixed'"
+        
+        # Verify Qdrant volume permissions
+        docker run --rm \
+            -v qdrant_data:/check \
+            alpine sh -c "ls -la /check" || true
+    fi
+    
+    success "Volume permissions fixed successfully"
 }
 
-fix_qdrant_permissions() {
-    retry_with_user_prompt "Qdrant Volume Permissions Fix" fix_qdrant_permissions_impl
+fix_volume_permissions() {
+    retry_with_user_prompt "Volume Permissions Fix" fix_volume_permissions_impl
 }
 
 # --- Deploy Services with Retry ---
@@ -1464,10 +1480,8 @@ deploy_services_impl() {
     info "Pulling latest container images..."
     $DOCKER_COMPOSE_CMD pull
     
-    # Fix Qdrant volume permissions before starting services (only if Qdrant is installed)
-    if [ "${INSTALL_QDRANT,,}" = "yes" ]; then
-        fix_qdrant_permissions
-    fi
+    # Fix volume permissions BEFORE starting services - CRITICAL
+    fix_volume_permissions
     
     # Start services
     docker_operation "compose_up"
@@ -1543,10 +1557,61 @@ case "${1:-help}" in
                 ;;
         esac
         ;;
+    troubleshoot)
+        echo "=== n8n Stack Troubleshooting ==="
+        echo
+        echo "1. Container Status:"
+        docker compose ps
+        echo
+        echo "2. Recent n8n Logs (last 50 lines):"
+        docker compose logs --tail 50 n8n
+        echo
+        echo "3. Volume Permissions Check:"
+        echo "n8n_data volume:"
+        docker run --rm -v n8n_data:/check alpine ls -la /check
+        echo
+        if docker volume ls | grep -q qdrant_data; then
+            echo "qdrant_data volume:"
+            docker run --rm -v qdrant_data:/check alpine ls -la /check
+            echo
+        fi
+        echo "4. Network Connectivity Test:"
+        echo "Testing n8n health endpoint..."
+        if docker exec n8n wget --spider --quiet http://localhost:5678/healthz 2>/dev/null; then
+            echo "✓ n8n health endpoint is accessible"
+        else
+            echo "✗ n8n health endpoint is NOT accessible"
+            echo "  This usually indicates n8n failed to start properly."
+        fi
+        echo
+        echo "5. Fix Common Issues:"
+        echo "   Fix volume permissions: ./manage.sh fix-permissions"
+        echo "   View n8n logs: ./manage.sh logs n8n"
+        echo "   Restart n8n: ./manage.sh restart n8n"
+        ;;
+    fix-permissions)
+        echo "=== Fixing Volume Permissions ==="
+        echo "Stopping containers..."
+        docker compose down
+        echo "Fixing n8n volume permissions..."
+        docker run --rm -v n8n_data:/fix alpine sh -c "chown -R 1000:1000 /fix && echo 'n8n permissions fixed'"
+        if docker volume ls | grep -q qdrant_data; then
+            echo "Fixing qdrant volume permissions..."
+            docker run --rm -v qdrant_data:/fix alpine sh -c "chown -R 1000:1000 /fix && echo 'qdrant permissions fixed'"
+        fi
+        echo "Starting containers..."
+        docker compose up -d
+        echo "Waiting for services to start..."
+        sleep 30
+        echo "=== Status after fix ==="
+        docker compose ps
+        ;;
     *)       
         echo "n8n Stack Management"
-        echo "Usage: $0 {start|stop|restart|logs|status|update|watchtower}"
+        echo "Usage: $0 {start|stop|restart|logs|status|update|watchtower|troubleshoot|fix-permissions}"
         echo "  watchtower: status, logs, force-update"
+        echo "  troubleshoot: comprehensive system diagnostics"
+        echo "  fix-permissions: fix Docker volume ownership issues"
         ;;
 esac
 EOF
@@ -1629,6 +1694,8 @@ show_results_impl() {
     if [ "${INSTALL_WATCHTOWER,,}" = "yes" ]; then
         echo "🔄 Watchtower: ./manage.sh watchtower status"
     fi
+    echo "🔧 Troubleshooting: ./manage.sh troubleshoot"
+    echo "🚨 Fix Permissions: ./manage.sh fix-permissions"
     echo
     echo "✅ Features:"
     echo "   ✓ SQLite database (no PostgreSQL complexity)"
@@ -1665,6 +1732,21 @@ show_results_impl() {
         echo "   • View Logs: ./manage.sh watchtower logs"
         echo "   • Suitable for: Homelab, development, and testing environments"
         echo "   ⚠️  Note: Watchtower is not recommended for production environments"
+        echo
+    fi
+    
+    # Add troubleshooting note if n8n container might have issues
+    if ! docker exec n8n wget --spider --quiet http://localhost:5678/healthz 2>/dev/null; then
+        echo
+        warning "⚠️  POTENTIAL ISSUE DETECTED"
+        echo "n8n health check failed. This commonly indicates volume permission issues."
+        echo
+        echo "🚨 Quick Fix Commands:"
+        echo "   cd ${SETUP_DIR}"
+        echo "   ./manage.sh fix-permissions"
+        echo "   ./manage.sh troubleshoot"
+        echo
+        echo "If issues persist, check: https://community.n8n.io"
         echo
     fi
 }
