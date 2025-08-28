@@ -1067,7 +1067,7 @@ $n8n_image_line
     networks:
       - n8n_network
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5678/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:443/healthz || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1208,7 +1208,7 @@ EOF
         cat > "${SETUP_DIR}/Caddyfile" << EOF
 # Main domain - n8n
 ${N8N_DOMAIN} {
-    reverse_proxy n8n:5678 {
+    reverse_proxy n8n:443 {
         health_uri /healthz
         health_interval 30s
         health_timeout 5s
